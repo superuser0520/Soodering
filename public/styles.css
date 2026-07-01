@@ -132,6 +132,18 @@ h1 {
   line-height: 1.05;
 }
 
+.brand-title {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.brand-title img {
+  border-radius: 12px;
+  height: 42px;
+  width: 42px;
+}
+
 h2 { font-size: 18px; }
 h3 { font-size: 16px; line-height: 1.2; }
 
@@ -324,6 +336,17 @@ h3 { font-size: 16px; line-height: 1.2; }
   display: block;
   margin-top: 14px;
   padding-top: 14px;
+}
+
+.quick-order-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.quick-order-actions button {
+  min-height: 44px;
 }
 
 .checkout-panel button {
@@ -557,6 +580,10 @@ button.is-loading::after {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     width: 100%;
+  }
+
+  .quick-order-actions {
+    grid-template-columns: 1fr;
   }
 
   .credit-grid {

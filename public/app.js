@@ -44,7 +44,10 @@ const state = {
   activeTab: "menu",
   menuFilter: "all",
   selections: new Map(),
-  upcomingOrders: []
+  upcomingOrders: [],
+  ordersLoaded: false,
+  ordersLoading: false,
+  walletLoading: false
 };
 
 const menusEl = document.querySelector("#menus");
@@ -73,6 +76,8 @@ const cartStatus = document.querySelector("#cartStatus");
 const cartList = document.querySelector("#cartList");
 const clearSelectionButton = document.querySelector("#clearSelectionButton");
 const placeOrderButton = document.querySelector("#placeOrderButton");
+const quickChineseButton = document.querySelector("#quickChineseButton");
+const quickMalayButton = document.querySelector("#quickMalayButton");
 const menuFilter = document.querySelector(".menu-filter");
 const tabButtons = document.querySelectorAll(".tab-button");
 const menuView = document.querySelector("#menuView");
@@ -214,6 +219,11 @@ function formatMoney(value) {
   return `$${Number(value || 0).toFixed(2)}`;
 }
 
+function isWeekday(date) {
+  const day = new Date(`${date}T00:00:00`).getDay();
+  return day >= 1 && day <= 5;
+}
+
 function parseMoneyValue(value = "") {
   const match = String(value).replace(/,/g, "").match(/[0-9]+(?:\.[0-9]+)?/);
   return match ? Number(match[0]) : 0;
@@ -304,6 +314,10 @@ function allProducts(days) {
   return days.flatMap((day) => day.products.map((product) => ({ ...product, label: day.label })));
 }
 
+function afterFirstPaint(callback) {
+  requestAnimationFrame(() => setTimeout(callback, 0));
+}
+
 function renderAccount() {
   if (state.account) {
     const label = `${state.account.name || state.account.username}${state.account.staffId ? ` #${state.account.staffId}` : ""}`;
@@ -340,6 +354,7 @@ function renderOrders(payload) {
     .filter((order) => order.deliveryDate && order.deliveryDate >= today && !/cancel/i.test(order.status || ""))
     .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate));
 
+  state.ordersLoaded = true;
   state.orderedDates = new Set(upcoming.map((order) => order.deliveryDate));
   state.upcomingOrders = upcoming;
   ordersTabCount.textContent = String(upcoming.length);
@@ -362,6 +377,15 @@ function renderOrders(payload) {
 
 function selectedItems() {
   return [...state.selections.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function weekdayProductsForStall(stallName) {
+  if (!state.data) return [];
+  return state.data.days
+    .filter((day) => isWeekday(day.date))
+    .filter((day) => !state.orderedDates?.has(day.date))
+    .map((day) => day.products.find((product) => product.stall.toLowerCase() === stallName.toLowerCase()))
+    .filter(Boolean);
 }
 
 function renderBasket() {
@@ -391,6 +415,65 @@ function renderBasket() {
     button.setAttribute("aria-label", selected ? "Selected meal" : "Pick meal");
     button.classList.toggle("selected", selected);
   });
+}
+
+async function submitProducts(products, successMessage) {
+  const result = await apiWithRelogin("/api/order/bulk", {
+    method: "POST",
+    body: JSON.stringify({
+      selections: products.map((item) => ({
+        productId: item.id,
+        date: item.date,
+        quantity: 1
+      })),
+      timeSlot: DEFAULT_TIME_SLOTS[0],
+      notes: ""
+    })
+  });
+  state.selections.clear();
+  cartStatus.textContent = successMessage;
+  renderBasket();
+  renderOrders({ orders: result.orders });
+  await refreshAccountData({ includeOrders: true, forceOrders: true });
+}
+
+async function quickOrder(stallName) {
+  if (!state.data) {
+    cartStatus.textContent = "Menu is still loading. Try again in a moment.";
+    return;
+  }
+
+  if (!state.ordersLoaded) {
+    cartStatus.textContent = "Checking which weekdays are not ordered yet...";
+    await loadOrders();
+  }
+
+  const products = weekdayProductsForStall(stallName);
+  if (products.length === 0) {
+    cartStatus.textContent = `No unordered weekday ${stallName} items are available.`;
+    return;
+  }
+
+  const summary = products.map((item) => `${formatDate(item.date)}: ${item.item} ${item.price}`).join("\n");
+  const confirmed = window.confirm(`Quick order ${stallName} for ${products.length} weekday${products.length === 1 ? "" : "s"}?\n\n${summary}\n\nTime: 11:30 - 11:55`);
+  if (!confirmed) return;
+
+  quickChineseButton.disabled = true;
+  quickMalayButton.disabled = true;
+  placeOrderButton.disabled = true;
+  placeOrderButton.classList.add("is-loading");
+  cartStatus.textContent = `Placing ${stallName} weekday orders...`;
+
+  try {
+    await submitProducts(products, `${stallName} weekday orders placed successfully.`);
+  } catch (error) {
+    cartStatus.textContent = error.message || "Quick order failed. Please refresh and try again.";
+  } finally {
+    quickChineseButton.disabled = false;
+    quickMalayButton.disabled = false;
+    placeOrderButton.disabled = false;
+    placeOrderButton.classList.remove("is-loading");
+  }
 }
 
 function renderProduct(product) {
@@ -481,18 +564,45 @@ async function loadMenus(refresh = false) {
   }
 }
 
-async function refreshAccountData() {
+async function loadWallet() {
   if (!state.account) return;
+  if (state.walletLoading) return;
+  state.walletLoading = true;
   try {
-    const [wallet, orders] = await Promise.all([
-      api("/api/wallet", { headers: {} }),
-      api("/api/orders", { headers: {} })
-    ]);
+    const wallet = await api("/api/wallet", { headers: {} });
     renderWallet(wallet);
+  } catch (error) {
+    walletBalance.textContent = "-";
+  } finally {
+    state.walletLoading = false;
+  }
+}
+
+async function loadOrders({ force = false } = {}) {
+  if (!state.account) return;
+  if (state.ordersLoading) return;
+  if (state.ordersLoaded && !force) return;
+
+  state.ordersLoading = true;
+  if (state.activeTab === "orders") {
+    ordersList.innerHTML = `<p class="meta">Loading upcoming orders...</p>`;
+  }
+
+  try {
+    const orders = await api("/api/orders", { headers: {} });
+    state.ordersLoaded = true;
     renderOrders(orders);
   } catch (error) {
     ordersList.innerHTML = `<p class="meta">${escapeHtml(error.message)}</p>`;
+  } finally {
+    state.ordersLoading = false;
   }
+}
+
+async function refreshAccountData({ includeOrders = false, forceOrders = false } = {}) {
+  if (!state.account) return;
+  await loadWallet();
+  if (includeOrders) await loadOrders({ force: forceOrders });
 }
 
 async function loadSession() {
@@ -503,7 +613,9 @@ async function loadSession() {
   }
   renderAccount();
   renderBasket();
-  await refreshAccountData();
+  afterFirstPaint(() => {
+    loadWallet();
+  });
 }
 
 refreshButton.addEventListener("click", () => loadMenus(true));
@@ -512,6 +624,9 @@ tabButtons.forEach((button) => {
   button.addEventListener("click", () => {
     state.activeTab = button.dataset.tab;
     renderActiveTab();
+    if (state.activeTab === "orders") {
+      loadOrders();
+    }
   });
 });
 
@@ -547,7 +662,9 @@ loginForm.addEventListener("submit", async (event) => {
     }
     state.account = data.account;
     renderAccount();
-    await refreshAccountData();
+    afterFirstPaint(() => {
+      refreshAccountData({ includeOrders: true, forceOrders: true });
+    });
   } catch (error) {
     accountStatus.textContent = error.message;
   } finally {
@@ -562,6 +679,8 @@ logoutButton.addEventListener("click", async () => {
   state.upcomingOrders = [];
   state.orderedDates = new Set();
   state.walletBalance = "";
+  state.ordersLoaded = false;
+  state.ordersLoading = false;
   renderAccount();
   walletBalance.textContent = "-";
   ordersList.innerHTML = "";
@@ -584,7 +703,7 @@ ordersList.addEventListener("click", async (event) => {
       body: JSON.stringify({ cancelUrl: button.dataset.cancelUrl })
     });
     renderOrders({ orders: result.orders });
-    await refreshAccountData();
+    await refreshAccountData({ includeOrders: true, forceOrders: true });
   } catch (error) {
     button.textContent = "Failed";
     ordersList.insertAdjacentHTML("afterbegin", `<p class="meta">${escapeHtml(error.message)}</p>`);
@@ -619,6 +738,9 @@ clearSelectionButton.addEventListener("click", () => {
   renderBasket();
 });
 
+quickChineseButton.addEventListener("click", () => quickOrder("Chinese Stall"));
+quickMalayButton.addEventListener("click", () => quickOrder("Malay Stall"));
+
 placeOrderButton.addEventListener("click", async () => {
   const selections = selectedItems();
   if (selections.length === 0) return;
@@ -631,23 +753,7 @@ placeOrderButton.addEventListener("click", async () => {
   placeOrderButton.classList.add("is-loading");
   cartStatus.textContent = "Placing selected orders...";
   try {
-    const result = await apiWithRelogin("/api/order/bulk", {
-      method: "POST",
-      body: JSON.stringify({
-        selections: selections.map((item) => ({
-          productId: item.id,
-          date: item.date,
-          quantity: 1
-        })),
-        timeSlot: DEFAULT_TIME_SLOTS[0],
-        notes: ""
-      })
-    });
-    state.selections.clear();
-    cartStatus.textContent = "Order placed successfully.";
-    renderBasket();
-    renderOrders({ orders: result.orders });
-    await refreshAccountData();
+    await submitProducts(selections, "Order placed successfully.");
   } catch (error) {
     cartStatus.textContent = error.message || "Order failed. Please refresh and try again.";
   } finally {
@@ -658,6 +764,6 @@ placeOrderButton.addEventListener("click", async () => {
 
 fillRememberedCredentials();
 renderActiveTab();
-loadSession().catch(() => {});
 loadMenus();
+loadSession().catch(() => {});
 setInterval(keepCafeteriaSessionAlive, KEEPALIVE_MS);

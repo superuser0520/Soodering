@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SooDering</title>
+    <link rel="icon" href="/soodering-icon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -38,7 +39,7 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Cafeteria Helper</p>
-            <h1>SooDering 🍱</h1>
+            <h1 class="brand-title"><img src="/soodering-icon.svg" alt="" aria-hidden="true">SooDering</h1>
             <p id="signedInLabel" class="meta"></p>
           </div>
           <div class="top-actions">
@@ -104,6 +105,10 @@
             <button id="clearSelectionButton" class="secondary" type="button">Clear</button>
           </div>
           <div id="cartList" class="compact-list"></div>
+          <div class="quick-order-actions">
+            <button id="quickChineseButton" class="secondary" type="button">Quick Chinese weekdays</button>
+            <button id="quickMalayButton" class="secondary" type="button">Quick Malay weekdays</button>
+          </div>
           <div class="checkout-panel">
             <button id="placeOrderButton" type="button">
               <span class="icon" aria-hidden="true">✅</span>
@@ -123,6 +128,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=10"></script>
+    <script src="/app.js?v=12"></script>
   </body>
 </html>
