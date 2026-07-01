@@ -1,4 +1,5 @@
 const http = require("node:http");
+const crypto = require("node:crypto");
 const { readFile } = require("node:fs/promises");
 const path = require("node:path");
 
@@ -16,8 +17,10 @@ const DEFAULT_TIME_SLOTS = [
 
 let cachedMenus = null;
 let cachedAt = 0;
-let siteSession = createSiteSession();
 const CACHE_MS = 5 * 60 * 1000;
+const SESSION_COOKIE = "soodering_sid";
+const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
+const sessions = new Map();
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -151,25 +154,63 @@ function createSiteSession() {
 
   return {
     account: null,
+    touchedAt: Date.now(),
     cookies,
     request,
     reset() {
       cookies.clear();
       this.account = null;
+      this.touchedAt = Date.now();
     }
   };
 }
 
-function assertLoggedIn() {
-  if (!siteSession.account) {
+function parseCookies(header = "") {
+  return Object.fromEntries(header.split(";").map((cookie) => {
+    const separator = cookie.indexOf("=");
+    if (separator < 0) return ["", ""];
+    return [
+      decodeURIComponent(cookie.slice(0, separator).trim()),
+      decodeURIComponent(cookie.slice(separator + 1).trim())
+    ];
+  }).filter(([key]) => key));
+}
+
+function getRequestSession(request, response) {
+  cleanupSessions();
+  const cookies = parseCookies(request.headers.cookie || "");
+  let id = cookies[SESSION_COOKIE];
+  let session = id ? sessions.get(id) : null;
+
+  if (!session) {
+    id = crypto.randomUUID();
+    session = createSiteSession();
+    sessions.set(id, session);
+    const secure = request.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+    response.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_MAX_AGE_MS / 1000)}${secure}`);
+  }
+
+  session.touchedAt = Date.now();
+  return session;
+}
+
+function cleanupSessions() {
+  const expiredBefore = Date.now() - SESSION_MAX_AGE_MS;
+  for (const [id, session] of sessions.entries()) {
+    if ((session.touchedAt || 0) < expiredBefore) sessions.delete(id);
+  }
+}
+
+function assertLoggedIn(session) {
+  if (!session.account) {
     const error = new Error("Please log in to the cafeteria account first.");
     error.status = 401;
     throw error;
   }
 }
 
-async function readSitePage(pathname) {
-  const response = await siteSession.request(pathname);
+async function readSitePage(session, pathname) {
+  const response = await session.request(pathname);
   if (!response.ok) throw new Error(`Cafeteria page failed: ${response.status}`);
   return response.text();
 }
@@ -183,9 +224,9 @@ function parseAccount(html) {
   };
 }
 
-async function loginToSite(username, password) {
-  siteSession.reset();
-  const loginHtml = await readSitePage("/");
+async function loginToSite(session, username, password) {
+  session.reset();
+  const loginHtml = await readSitePage(session, "/");
   const body = new URLSearchParams({
     username,
     password,
@@ -195,7 +236,7 @@ async function loginToSite(username, password) {
     _wp_http_referer: extractInput(loginHtml, "_wp_http_referer") || "/"
   });
 
-  const response = await siteSession.request("/", {
+  const response = await session.request("/", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body
@@ -207,12 +248,12 @@ async function loginToSite(username, password) {
   }
 
   const account = parseAccount(html);
-  siteSession.account = {
+  session.account = {
     username,
     name: account.name || username,
     staffId: account.staffId
   };
-  return siteSession.account;
+  return session.account;
 }
 
 function parseWallet(html) {
@@ -342,8 +383,8 @@ function parseCheckout(html) {
   };
 }
 
-async function addToCart({ productId, date, quantity = 1 }) {
-  assertLoggedIn();
+async function addToCart(session, { productId, date, quantity = 1 }) {
+  assertLoggedIn(session);
   if (!productId || !date) throw new Error("Product and delivery date are required.");
 
   const body = new URLSearchParams({
@@ -351,28 +392,28 @@ async function addToCart({ productId, date, quantity = 1 }) {
     quantity: String(quantity || 1),
     "add-to-cart": String(productId)
   });
-  const response = await siteSession.request(`/lunch/?menu-date=${encodeURIComponent(date)}`, {
+  const response = await session.request(`/lunch/?menu-date=${encodeURIComponent(date)}`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body
   });
   await response.text();
-  return parseCart(await readSitePage("/cart/"));
+  return parseCart(await readSitePage(session, "/cart/"));
 }
 
-async function clearCart() {
-  assertLoggedIn();
-  let cart = parseCart(await readSitePage("/cart/"));
+async function clearCart(session) {
+  assertLoggedIn(session);
+  let cart = parseCart(await readSitePage(session, "/cart/"));
   for (const item of cart.items) {
-    if (item.removeUrl) await siteSession.request(item.removeUrl);
+    if (item.removeUrl) await session.request(item.removeUrl);
   }
-  cart = parseCart(await readSitePage("/cart/"));
+  cart = parseCart(await readSitePage(session, "/cart/"));
   return cart;
 }
 
-async function placeOrder({ timeSlot = "", notes = "" }) {
-  assertLoggedIn();
-  const checkoutHtml = await readSitePage("/checkout/");
+async function placeOrder(session, { timeSlot = "", notes = "" }) {
+  assertLoggedIn(session);
+  const checkoutHtml = await readSitePage(session, "/checkout/");
   const checkout = parseCheckout(checkoutHtml);
   if (checkout.empty || checkout.items.length === 0) throw new Error("Cart is empty.");
 
@@ -398,7 +439,7 @@ async function placeOrder({ timeSlot = "", notes = "" }) {
     woocommerce_checkout_place_order: "Place order"
   });
 
-  const response = await siteSession.request("/?wc-ajax=checkout", {
+  const response = await session.request("/?wc-ajax=checkout", {
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -422,25 +463,25 @@ async function placeOrder({ timeSlot = "", notes = "" }) {
   return {
     result: payload.result,
     redirect: payload.redirect || "",
-    orders: parseOrders(await readSitePage("/orders/"))
+    orders: await loadOrders(session)
   };
 }
 
-async function placeBulkOrder({ selections = [], timeSlot = "", notes = "" }) {
-  assertLoggedIn();
+async function placeBulkOrder(session, { selections = [], timeSlot = "", notes = "" }) {
+  assertLoggedIn(session);
   if (!Array.isArray(selections) || selections.length === 0) {
     throw new Error("Please select at least one meal.");
   }
 
   const results = [];
   for (const selection of selections) {
-    await clearCart();
-    await addToCart({
+    await clearCart(session);
+    await addToCart(session, {
       productId: selection.productId,
       date: selection.date,
       quantity: selection.quantity || 1
     });
-    const placed = await placeOrder({ timeSlot, notes });
+    const placed = await placeOrder(session, { timeSlot, notes });
     results.push({
       date: selection.date,
       productId: selection.productId,
@@ -448,27 +489,50 @@ async function placeBulkOrder({ selections = [], timeSlot = "", notes = "" }) {
       redirect: placed.redirect
     });
   }
-  await clearCart();
+  await clearCart(session);
 
   return {
     result: "success",
     placed: results,
-    orders: parseOrders(await readSitePage("/orders/"))
+    orders: await loadOrders(session)
   };
 }
 
-async function cancelOrder(cancelUrl) {
-  assertLoggedIn();
+async function cancelOrder(session, cancelUrl) {
+  assertLoggedIn(session);
   if (!cancelUrl || !cancelUrl.startsWith(SITE_ORIGIN)) {
     throw new Error("A valid cafeteria cancel link is required.");
   }
 
-  const response = await siteSession.request(cancelUrl);
+  const response = await session.request(cancelUrl);
   await response.text();
   return {
-    orders: parseOrders(await readSitePage("/orders/")),
-    cart: parseCart(await readSitePage("/cart/"))
+    orders: await loadOrders(session),
+    cart: parseCart(await readSitePage(session, "/cart/"))
   };
+}
+
+async function loadOrders(session) {
+  assertLoggedIn(session);
+  const paths = ["/orders/", ...Array.from({ length: 5 }, (_, index) => `/orders/${index + 2}`)];
+  const pages = [];
+  for (const pathname of paths) {
+    try {
+      const html = await readSitePage(session, pathname);
+      const parsed = parseOrders(html);
+      if (parsed.length > 0) pages.push(parsed);
+    } catch {
+      // Some cafeteria installs do not expose every pagination style.
+    }
+  }
+
+  const seen = new Set();
+  return pages.flat().filter((order) => {
+    const key = `${order.order}|${order.deliveryDate}|${order.product}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function parseDates(html) {
@@ -607,6 +671,7 @@ async function serveStatic(request, response) {
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host}`);
+    const session = getRequestSession(request, response);
 
     if (url.pathname === "/api/menus") {
       const force = url.searchParams.get("refresh") === "1";
@@ -617,69 +682,68 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/login" && request.method === "POST") {
       const { username, password } = await readJsonBody(request);
       if (!username || !password) throw new Error("Username and password are required.");
-      sendJson(response, 200, { account: await loginToSite(username, password) });
+      sendJson(response, 200, { account: await loginToSite(session, username, password) });
       return;
     }
 
     if (url.pathname === "/api/logout" && request.method === "POST") {
-      siteSession.reset();
+      session.reset();
       sendJson(response, 200, { ok: true });
       return;
     }
 
     if (url.pathname === "/api/session") {
-      sendJson(response, 200, { account: siteSession.account });
+      sendJson(response, 200, { account: session.account });
       return;
     }
 
     if (url.pathname === "/api/wallet") {
-      assertLoggedIn();
-      const wallet = parseWallet(await readSitePage("/woo-wallet/"));
+      assertLoggedIn(session);
+      const wallet = parseWallet(await readSitePage(session, "/woo-wallet/"));
       sendJson(response, 200, { balance: wallet.balance });
       return;
     }
 
     if (url.pathname === "/api/orders") {
-      assertLoggedIn();
-      sendJson(response, 200, { orders: parseOrders(await readSitePage("/orders/")) });
+      sendJson(response, 200, { orders: await loadOrders(session) });
       return;
     }
 
     if (url.pathname === "/api/order/cancel" && request.method === "POST") {
       const { cancelUrl } = await readJsonBody(request);
-      sendJson(response, 200, await cancelOrder(cancelUrl));
+      sendJson(response, 200, await cancelOrder(session, cancelUrl));
       return;
     }
 
     if (url.pathname === "/api/cart") {
-      assertLoggedIn();
-      sendJson(response, 200, parseCart(await readSitePage("/cart/")));
+      assertLoggedIn(session);
+      sendJson(response, 200, parseCart(await readSitePage(session, "/cart/")));
       return;
     }
 
     if (url.pathname === "/api/cart/add" && request.method === "POST") {
-      sendJson(response, 200, await addToCart(await readJsonBody(request)));
+      sendJson(response, 200, await addToCart(session, await readJsonBody(request)));
       return;
     }
 
     if (url.pathname === "/api/cart/clear" && request.method === "POST") {
-      sendJson(response, 200, await clearCart());
+      sendJson(response, 200, await clearCart(session));
       return;
     }
 
     if (url.pathname === "/api/checkout") {
-      assertLoggedIn();
-      sendJson(response, 200, parseCheckout(await readSitePage("/checkout/")));
+      assertLoggedIn(session);
+      sendJson(response, 200, parseCheckout(await readSitePage(session, "/checkout/")));
       return;
     }
 
     if (url.pathname === "/api/order/place" && request.method === "POST") {
-      sendJson(response, 200, await placeOrder(await readJsonBody(request)));
+      sendJson(response, 200, await placeOrder(session, await readJsonBody(request)));
       return;
     }
 
     if (url.pathname === "/api/order/bulk" && request.method === "POST") {
-      sendJson(response, 200, await placeBulkOrder(await readJsonBody(request)));
+      sendJson(response, 200, await placeBulkOrder(session, await readJsonBody(request)));
       return;
     }
 
