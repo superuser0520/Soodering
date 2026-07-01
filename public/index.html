@@ -60,6 +60,28 @@
           <button id="ordersTabButton" class="tab-button" type="button" data-tab="orders">🧾 Upcoming <span id="ordersTabCount" class="tab-count">0</span></button>
         </nav>
 
+        <section id="creditPanel" class="panel credit-panel" hidden>
+          <div>
+            <p class="eyebrow">Monthly credit</p>
+            <h2 id="creditDaily">$0.00 / workday</h2>
+            <p id="creditDetails" class="meta">Calculating credit cycle...</p>
+          </div>
+          <div class="credit-grid">
+            <div>
+              <span>Refresh in</span>
+              <strong id="creditRefresh">-</strong>
+            </div>
+            <div>
+              <span>Upcoming spend</span>
+              <strong id="creditUpcoming">-</strong>
+            </div>
+            <div>
+              <span>Assumed left</span>
+              <strong id="creditProjected">-</strong>
+            </div>
+          </div>
+        </section>
+
         <section id="ordersView" class="tab-panel" hidden>
           <section class="panel orders-panel">
             <div class="panel-heading">
@@ -101,6 +123,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=7"></script>
+    <script src="/app.js?v=8"></script>
   </body>
 </html>

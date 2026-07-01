@@ -7,6 +7,35 @@ const DEFAULT_TIME_SLOTS = [
 ];
 const CREDENTIALS_KEY = "soodering.credentials";
 const LEGACY_CREDENTIALS_KEY = "shimanoLunch.credentials";
+const MONTHLY_CREDIT = 100;
+const SG_PUBLIC_HOLIDAYS = new Set([
+  "2026-01-01",
+  "2026-02-17",
+  "2026-02-18",
+  "2026-03-21",
+  "2026-04-03",
+  "2026-05-01",
+  "2026-05-27",
+  "2026-05-31",
+  "2026-06-01",
+  "2026-08-09",
+  "2026-08-10",
+  "2026-11-08",
+  "2026-11-09",
+  "2026-12-25",
+  "2027-01-01",
+  "2027-02-06",
+  "2027-02-07",
+  "2027-02-08",
+  "2027-03-10",
+  "2027-03-26",
+  "2027-05-01",
+  "2027-05-17",
+  "2027-05-20",
+  "2027-08-09",
+  "2027-10-28",
+  "2027-12-25"
+]);
 
 const state = {
   account: null,
@@ -31,6 +60,12 @@ const signedInLabel = document.querySelector("#signedInLabel");
 const loginButton = document.querySelector("#loginButton");
 const logoutButton = document.querySelector("#logoutButton");
 const walletBalance = document.querySelector("#walletBalance");
+const creditPanel = document.querySelector("#creditPanel");
+const creditDaily = document.querySelector("#creditDaily");
+const creditDetails = document.querySelector("#creditDetails");
+const creditRefresh = document.querySelector("#creditRefresh");
+const creditUpcoming = document.querySelector("#creditUpcoming");
+const creditProjected = document.querySelector("#creditProjected");
 const ordersList = document.querySelector("#ordersList");
 const ordersTabCount = document.querySelector("#ordersTabCount");
 const cartStatus = document.querySelector("#cartStatus");
@@ -74,14 +109,29 @@ function fillRememberedCredentials() {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "content-type": "application/json",
-      ...(options.headers || {})
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: {
+        "content-type": "application/json",
+        ...(options.headers || {})
+      }
+    });
+  } catch (error) {
+    if (/expected pattern/i.test(error.message || "")) {
+      throw new Error("The cafeteria request was rejected before it could be sent. Refresh the page and try again.");
     }
-  });
-  const data = await response.json();
+    throw error;
+  }
+
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || "The server returned an unreadable response.");
+  }
   if (!response.ok) throw new Error(data.error || "Request failed");
   return data;
 }
@@ -102,6 +152,98 @@ function formatDate(date) {
     month: "short",
     year: "numeric"
   }).format(new Date(`${date}T00:00:00`));
+}
+
+function formatMoney(value) {
+  return `$${Number(value || 0).toFixed(2)}`;
+}
+
+function parseMoneyValue(value = "") {
+  const match = String(value).replace(/,/g, "").match(/[0-9]+(?:\.[0-9]+)?/);
+  return match ? Number(match[0]) : 0;
+}
+
+function parseOrderQuantity(product = "") {
+  return [...String(product).matchAll(/\bx\s*(\d+)\b/gi)].reduce((sum, match) => sum + Number(match[1] || 0), 0) || 1;
+}
+
+function normalizeMealName(value = "") {
+  return String(value)
+    .toLowerCase()
+    .replace(/&nbsp;/g, " ")
+    .replace(/\bx\s*\d+\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(stall|side|set)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function isoDate(date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function daysBetween(start, end) {
+  return Math.round((end - start) / 86400000);
+}
+
+function isWorkingDay(date) {
+  const day = date.getDay();
+  return day !== 0 && day !== 6 && !SG_PUBLIC_HOLIDAYS.has(isoDate(date));
+}
+
+function creditCycle(todayIsoValue = todayIso()) {
+  const today = new Date(`${todayIsoValue}T00:00:00`);
+  const start = new Date(today);
+  if (today.getDate() >= 27) {
+    start.setDate(27);
+  } else {
+    start.setMonth(start.getMonth() - 1, 27);
+  }
+
+  const refresh = new Date(start);
+  refresh.setMonth(refresh.getMonth() + 1, 27);
+  const end = addDays(refresh, -1);
+  const days = [];
+  for (let cursor = new Date(start); cursor <= end; cursor = addDays(cursor, 1)) {
+    if (isWorkingDay(cursor)) days.push(isoDate(cursor));
+  }
+
+  const todayIndex = days.findIndex((day) => day >= todayIsoValue);
+  const workedUntilToday = days.filter((day) => day <= todayIsoValue).length;
+  const workdaysLeft = todayIndex >= 0 ? days.length - todayIndex : 0;
+
+  return {
+    start: isoDate(start),
+    end: isoDate(end),
+    refresh: isoDate(refresh),
+    workingDays: days.length,
+    workdaysLeft,
+    calendarDaysLeft: Math.max(0, daysBetween(today, refresh)),
+    dailyCredit: days.length ? MONTHLY_CREDIT / days.length : 0,
+    accruedCredit: days.length ? (MONTHLY_CREDIT / days.length) * workedUntilToday : 0
+  };
+}
+
+function isActiveOrder(order) {
+  return !/cancel/i.test(order.status || "") && order.deliveryDate && order.deliveryDate >= todayIso();
+}
+
+function ordersForProduct(product) {
+  const productNeedle = normalizeMealName(`${product.title} ${product.item}`);
+  return state.upcomingOrders.filter((order) => {
+    if (order.deliveryDate !== product.date) return false;
+    const orderNeedle = normalizeMealName(order.product);
+    return orderNeedle.includes(productNeedle) || productNeedle.includes(orderNeedle) || orderNeedle.includes(normalizeMealName(product.item));
+  });
 }
 
 function allProducts(days) {
@@ -126,6 +268,8 @@ function renderAccount() {
 
 function renderWallet(wallet) {
   walletBalance.textContent = wallet.balance || "-";
+  state.walletBalance = wallet.balance || "";
+  renderCredit();
 }
 
 function renderActiveTab() {
@@ -139,7 +283,7 @@ function renderActiveTab() {
 function renderOrders(payload) {
   const today = todayIso();
   const upcoming = payload.orders
-    .filter((order) => order.deliveryDate && order.deliveryDate >= today)
+    .filter((order) => order.deliveryDate && order.deliveryDate >= today && !/cancel/i.test(order.status || ""))
     .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate));
 
   state.orderedDates = new Set(upcoming.map((order) => order.deliveryDate));
@@ -158,6 +302,7 @@ function renderOrders(payload) {
       </div>
     </div>
   `).join("") || `<p class="meta">No upcoming orders from today onward.</p>`;
+  renderCredit();
   renderMenus();
 }
 
@@ -195,22 +340,45 @@ function renderBasket() {
 }
 
 function renderProduct(product) {
+  const orders = ordersForProduct(product);
+  const orderedQuantity = orders.reduce((sum, order) => sum + parseOrderQuantity(order.product), 0);
   const image = product.imageUrl
     ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.title)}" loading="lazy">`
     : `<span class="food-logo">🍽️</span>`;
 
   return `
-    <li class="menu-item">
+    <li class="menu-item ${orders.length ? "ordered-item" : ""}">
       <a class="thumb" href="${escapeHtml(product.productUrl)}" target="_blank" rel="noreferrer">${image}</a>
       <div class="menu-copy">
         <p class="stall">${escapeHtml(product.stall)}</p>
         <h3>${escapeHtml(product.item)}</h3>
         <p class="meta">${escapeHtml(product.price)}${product.stock ? ` · ${escapeHtml(product.stock)}` : ""}</p>
+        ${orders.length ? `<p class="ordered-badge">Ordered x ${orderedQuantity}</p>` : ""}
         ${product.description ? `<p class="description">${escapeHtml(product.description)}</p>` : ""}
       </div>
       <button class="secondary pick-button" type="button" data-product-id="${escapeHtml(product.id)}" data-date="${escapeHtml(product.date)}" aria-label="Pick meal">+</button>
     </li>
   `;
+}
+
+function renderCredit() {
+  if (!state.account) {
+    creditPanel.hidden = true;
+    return;
+  }
+
+  const cycle = creditCycle();
+  const cycleOrders = state.upcomingOrders.filter((order) => order.deliveryDate >= cycle.start && order.deliveryDate <= cycle.end && isActiveOrder(order));
+  const upcomingSpend = cycleOrders.reduce((sum, order) => sum + parseMoneyValue(order.total), 0);
+  const wallet = parseMoneyValue(state.walletBalance);
+  const projected = Math.max(0, wallet - upcomingSpend);
+
+  creditPanel.hidden = false;
+  creditDaily.textContent = `${formatMoney(cycle.dailyCredit)} / workday`;
+  creditDetails.textContent = `${formatDate(cycle.start)} to ${formatDate(cycle.end)} has ${cycle.workingDays} credited workdays. Accrued by today: ${formatMoney(cycle.accruedCredit)}.`;
+  creditRefresh.textContent = `${cycle.calendarDaysLeft} day${cycle.calendarDaysLeft === 1 ? "" : "s"}`;
+  creditUpcoming.textContent = formatMoney(upcomingSpend);
+  creditProjected.textContent = formatMoney(projected);
 }
 
 function renderMenus() {
@@ -244,6 +412,7 @@ function renderMenus() {
 
 async function loadMenus(refresh = false) {
   refreshButton.disabled = true;
+  menusEl.classList.add("is-loading");
   statusEl.textContent = refresh ? "Refreshing menus..." : "Loading cafeteria menus...";
 
   try {
@@ -254,6 +423,7 @@ async function loadMenus(refresh = false) {
     menusEl.innerHTML = "";
   } finally {
     refreshButton.disabled = false;
+    menusEl.classList.remove("is-loading");
   }
 }
 
@@ -332,9 +502,13 @@ logoutButton.addEventListener("click", async () => {
   await api("/api/logout", { method: "POST", body: "{}" });
   state.account = null;
   state.selections.clear();
+  state.upcomingOrders = [];
+  state.orderedDates = new Set();
+  state.walletBalance = "";
   renderAccount();
   walletBalance.textContent = "-";
   ordersList.innerHTML = "";
+  renderCredit();
   fillRememberedCredentials();
   renderBasket();
 });
@@ -397,6 +571,7 @@ placeOrderButton.addEventListener("click", async () => {
   if (!confirmed) return;
 
   placeOrderButton.disabled = true;
+  placeOrderButton.classList.add("is-loading");
   cartStatus.textContent = "Placing selected orders...";
   try {
     const result = await api("/api/order/bulk", {
@@ -417,9 +592,10 @@ placeOrderButton.addEventListener("click", async () => {
     renderOrders({ orders: result.orders });
     await refreshAccountData();
   } catch (error) {
-    cartStatus.textContent = error.message;
+    cartStatus.textContent = error.message || "Order failed. Please refresh and try again.";
   } finally {
     placeOrderButton.disabled = false;
+    placeOrderButton.classList.remove("is-loading");
   }
 });
 
