@@ -108,6 +108,16 @@ function fillRememberedCredentials() {
   }
 }
 
+function getRememberedCredentials() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CREDENTIALS_KEY) || localStorage.getItem(LEGACY_CREDENTIALS_KEY) || "{}");
+    return saved.username && saved.password ? saved : null;
+  } catch {
+    forgetCredentials();
+    return null;
+  }
+}
+
 async function api(path, options = {}) {
   let response;
   try {
@@ -134,6 +144,35 @@ async function api(path, options = {}) {
   }
   if (!response.ok) throw new Error(data.error || "Request failed");
   return data;
+}
+
+async function loginWithRememberedCredentials() {
+  const saved = getRememberedCredentials();
+  if (!saved) return false;
+
+  const data = await api("/api/login", {
+    method: "POST",
+    body: JSON.stringify({
+      username: saved.username,
+      password: saved.password
+    })
+  });
+  state.account = data.account;
+  renderAccount();
+  return true;
+}
+
+async function apiWithRelogin(path, options = {}) {
+  try {
+    return await api(path, options);
+  } catch (error) {
+    if (!/log in to the cafeteria account/i.test(error.message || "")) throw error;
+
+    cartStatus.textContent = "Cafeteria login expired. Reconnecting...";
+    const loggedIn = await loginWithRememberedCredentials();
+    if (!loggedIn) throw error;
+    return api(path, options);
+  }
 }
 
 function todayIso() {
@@ -218,7 +257,6 @@ function creditCycle(todayIsoValue = todayIso()) {
   }
 
   const todayIndex = days.findIndex((day) => day >= todayIsoValue);
-  const workedUntilToday = days.filter((day) => day <= todayIsoValue).length;
   const workdaysLeft = todayIndex >= 0 ? days.length - todayIndex : 0;
 
   return {
@@ -228,8 +266,7 @@ function creditCycle(todayIsoValue = todayIso()) {
     workingDays: days.length,
     workdaysLeft,
     calendarDaysLeft: Math.max(0, daysBetween(today, refresh)),
-    dailyCredit: days.length ? MONTHLY_CREDIT / days.length : 0,
-    accruedCredit: days.length ? (MONTHLY_CREDIT / days.length) * workedUntilToday : 0
+    dailyCredit: days.length ? MONTHLY_CREDIT / days.length : 0
   };
 }
 
@@ -375,7 +412,7 @@ function renderCredit() {
 
   creditPanel.hidden = false;
   creditDaily.textContent = `${formatMoney(cycle.dailyCredit)} / workday`;
-  creditDetails.textContent = `${formatDate(cycle.start)} to ${formatDate(cycle.end)} has ${cycle.workingDays} credited workdays. Accrued by today: ${formatMoney(cycle.accruedCredit)}.`;
+  creditDetails.textContent = `${formatDate(cycle.start)} to ${formatDate(cycle.end)} has ${cycle.workingDays} credited workdays.`;
   creditRefresh.textContent = `${cycle.calendarDaysLeft} day${cycle.calendarDaysLeft === 1 ? "" : "s"}`;
   creditUpcoming.textContent = formatMoney(upcomingSpend);
   creditProjected.textContent = formatMoney(projected);
@@ -574,7 +611,7 @@ placeOrderButton.addEventListener("click", async () => {
   placeOrderButton.classList.add("is-loading");
   cartStatus.textContent = "Placing selected orders...";
   try {
-    const result = await api("/api/order/bulk", {
+    const result = await apiWithRelogin("/api/order/bulk", {
       method: "POST",
       body: JSON.stringify({
         selections: selections.map((item) => ({
