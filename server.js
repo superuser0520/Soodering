@@ -1,0 +1,694 @@
+const http = require("node:http");
+const { readFile } = require("node:fs/promises");
+const path = require("node:path");
+
+const PORT = Number(process.env.PORT || 3000);
+const SITE_ORIGIN = "https://ssip-cafeteria.whew.life";
+const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
+const PUBLIC_DIR = path.join(__dirname, "public");
+const DEFAULT_TIME_SLOTS = [
+  "11:30 - 11:55",
+  "12:00 - 12:25",
+  "12:30 - 12:55",
+  "13:00 - 13:25",
+  "13:30 - 13:55"
+];
+
+let cachedMenus = null;
+let cachedAt = 0;
+let siteSession = createSiteSession();
+const CACHE_MS = 5 * 60 * 1000;
+
+const contentTypes = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8"
+};
+
+function decodeHtml(value = "") {
+  const named = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: "\"",
+    apos: "'",
+    nbsp: " ",
+    ndash: "-",
+    mdash: "-",
+    times: "x"
+  };
+
+  return value
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
+    .replace(/&([a-z]+);/gi, (_, key) => named[key] || `&${key};`)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripTags(value = "") {
+  return decodeHtml(value.replace(/<[^>]*>/g, " "));
+}
+
+function extractInput(html, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = html.match(new RegExp(`<input[^>]+name=["']${escaped}["'][^>]*>`, "i"));
+  return match?.[0].match(/\bvalue=["']([^"']*)["']/i)?.[1] || "";
+}
+
+function extractSelectOptions(html, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [...html.matchAll(new RegExp(`<select[^>]+name=["']${escaped}["'][^>]*>([\\s\\S]*?)<\\/select>`, "gi"))];
+  const optionSets = matches.map((match) => [...match[1].matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi)].map((option) => ({
+    value: option[1].match(/\bvalue=["']([^"']*)["']/i)?.[1] || stripTags(option[2]),
+    label: stripTags(option[2]),
+    selected: /\bselected\b/i.test(option[1]),
+    disabled: /\bdisabled\b/i.test(option[1])
+  })));
+
+  return optionSets.sort((a, b) => {
+    const score = (options) => options.filter((option) => !/No time slot/i.test(option.label)).length;
+    return score(b) - score(a);
+  })[0] || [];
+}
+
+function parseMoney(text = "") {
+  const normalized = stripTags(text).replace(/\$\s+/g, "$");
+  return normalized.match(/\$[0-9,.]+/)?.[0] || "";
+}
+
+function normalizeStall(value) {
+  return value
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ")
+    .replace(/\bW\b/g, "w");
+}
+
+async function fetchHtml(url) {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(30000),
+    headers: {
+      "user-agent": "Mozilla/5.0 Shimano Lunch Viewer",
+      accept: "text/html,application/xhtml+xml"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${url}: ${response.status}`);
+  }
+
+  return response.text();
+}
+
+function createSiteSession() {
+  const cookies = new Map();
+
+  function storeCookies(response) {
+    const setCookies = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
+    for (const cookie of setCookies) {
+      const [pair] = cookie.split(";");
+      const separator = pair.indexOf("=");
+      if (separator > 0) cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+    }
+  }
+
+  function cookieHeader() {
+    return [...cookies.entries()].map(([key, value]) => `${key}=${value}`).join("; ");
+  }
+
+  async function request(pathname, options = {}) {
+    const url = pathname.startsWith("http") ? pathname : `${SITE_ORIGIN}${pathname}`;
+    const headers = {
+      "user-agent": "Mozilla/5.0 Shimano Lunch Viewer",
+      accept: "text/html,application/xhtml+xml,application/json",
+      referer: SITE_ORIGIN,
+      ...(options.headers || {})
+    };
+    const cookie = cookieHeader();
+    if (cookie) headers.cookie = cookie;
+
+    const response = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(20000),
+      ...options,
+      headers
+    });
+    storeCookies(response);
+
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (location) {
+        const next = new URL(location, url).href;
+        return request(next, { method: "GET", headers: { accept: headers.accept } });
+      }
+    }
+
+    return response;
+  }
+
+  return {
+    account: null,
+    cookies,
+    request,
+    reset() {
+      cookies.clear();
+      this.account = null;
+    }
+  };
+}
+
+function assertLoggedIn() {
+  if (!siteSession.account) {
+    const error = new Error("Please log in to the cafeteria account first.");
+    error.status = 401;
+    throw error;
+  }
+}
+
+async function readSitePage(pathname) {
+  const response = await siteSession.request(pathname);
+  if (!response.ok) throw new Error(`Cafeteria page failed: ${response.status}`);
+  return response.text();
+}
+
+function parseAccount(html) {
+  const name = html.match(/<strong>([^<]+)<\/strong>/i)?.[1] || html.match(/woocommerce-MyAccount-content[\s\S]*?<p>\s*Hello\s*<strong>([^<]+)/i)?.[1] || "";
+  const staffId = html.match(/<em>#([^<]+)<\/em>/i)?.[1] || "";
+  return {
+    name: stripTags(name),
+    staffId: stripTags(staffId)
+  };
+}
+
+async function loginToSite(username, password) {
+  siteSession.reset();
+  const loginHtml = await readSitePage("/");
+  const body = new URLSearchParams({
+    username,
+    password,
+    rememberme: "forever",
+    login: "Log in",
+    "woocommerce-login-nonce": extractInput(loginHtml, "woocommerce-login-nonce"),
+    _wp_http_referer: extractInput(loginHtml, "_wp_http_referer") || "/"
+  });
+
+  const response = await siteSession.request("/", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body
+  });
+  const html = await response.text();
+
+  if (/woocommerce-error|Login|Username or email address/i.test(html) && !/customer-logout|Account pages|Hello/i.test(html)) {
+    throw new Error("Login failed. Please check the cafeteria username and password.");
+  }
+
+  const account = parseAccount(html);
+  siteSession.account = {
+    username,
+    name: account.name || username,
+    staffId: account.staffId
+  };
+  return siteSession.account;
+}
+
+function parseWallet(html) {
+  const balanceSection = html.match(/woo-wallet-price[^>]*>([\s\S]*?)(?:<\/p>|<\/div>|<ul|Source)/i)?.[1]
+    || html.match(/Balance\s*(?:&#36;|\$)\s*([0-9,.]+)/i)?.[0]
+    || "";
+  const list = html.match(/woo-wallet-transactions-items[\s\S]*?<\/ul>/i)?.[0] || "";
+  const transactions = [...list.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)]
+    .slice(0, 20)
+    .map((match) => ({
+      source: stripTags(match[1].match(/<p[^>]*>([\s\S]*?)<\/p>/i)?.[1] || ""),
+      date: stripTags(match[1].match(/<small[^>]*>([\s\S]*?)<\/small>/i)?.[1] || ""),
+      direction: /transaction-type-credit/i.test(match[1]) ? "+" : "-",
+      amount: parseMoney(match[1])
+    }));
+
+  return {
+    balance: parseMoney(balanceSection),
+    transactions
+  };
+}
+
+function parseOrderDeliveryDate(delivery = "") {
+  const months = {
+    january: "01",
+    february: "02",
+    march: "03",
+    april: "04",
+    may: "05",
+    june: "06",
+    july: "07",
+    august: "08",
+    september: "09",
+    october: "10",
+    november: "11",
+    december: "12"
+  };
+  const match = delivery.match(/[A-Z][a-z]+ \d{1,2}, \d{4}/);
+  if (!match) return "";
+  const parts = match[0].match(/([A-Z][a-z]+) (\d{1,2}), (\d{4})/);
+  if (!parts) return "";
+  return `${parts[3]}-${months[parts[1].toLowerCase()]}-${parts[2].padStart(2, "0")}`;
+}
+
+function parseOrders(html) {
+  const tbody = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i)?.[1] || "";
+  return [...tbody.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].slice(0, 30).map((rowMatch) => {
+    const cells = [...rowMatch[1].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((cell) => stripTags(cell[1]));
+    const viewUrl = decodeHtml(rowMatch[1].match(/href=["']([^"']*view-order[^"']*)["']/i)?.[1] || "");
+    const cancelUrl = decodeHtml(rowMatch[1].match(/href=["']([^"']*cancel_order[^"']*)["']/i)?.[1] || "");
+    return {
+      order: cells[0] || "",
+      created: cells[1] || "",
+      delivery: cells[2] || "",
+      deliveryDate: parseOrderDeliveryDate(cells[2] || ""),
+      product: cells[3] || "",
+      status: cells[4] || "",
+      total: cells[5] || "",
+      viewUrl,
+      cancelUrl
+    };
+  }).filter((order) => order.order);
+}
+
+function parseCart(html) {
+  const rows = [...html.matchAll(/<tr[^>]*class=["'][^"']*cart_item[^"']*["'][^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => {
+    const row = match[1];
+    const product = stripTags(row.match(/class=["'][^"']*product-name[^"']*["'][^>]*>([\s\S]*?)<\/td>/i)?.[1] || "");
+    const price = parseMoney(row.match(/class=["'][^"']*product-price[^"']*["'][^>]*>([\s\S]*?)<\/td>/i)?.[1] || "");
+    const quantity = row.match(/\bname=["'][^"']*qty[^"']*["'][^>]*value=["']([^"']+)/i)?.[1] || "1";
+    const subtotal = parseMoney(row.match(/class=["'][^"']*product-subtotal[^"']*["'][^>]*>([\s\S]*?)<\/td>/i)?.[1] || "");
+    const removeUrl = decodeHtml(row.match(/href=["']([^"']*remove_item[^"']*)["']/i)?.[1] || "");
+    return { product, price, quantity, subtotal, removeUrl };
+  });
+
+  return {
+    empty: /cart is currently empty/i.test(html),
+    items: rows,
+    total: parseMoney(html.match(/order-total[\s\S]*?<\/tr>/i)?.[0] || html)
+  };
+}
+
+function parseCheckout(html) {
+  const summaryRows = [...html.matchAll(/<tr[^>]*class=["'][^"']*cart_item[^"']*["'][^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => {
+    const cells = [...match[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => stripTags(cell[1]));
+    return {
+      product: cells[0] || "",
+      subtotal: cells[1] || ""
+    };
+  });
+  let timeSlots = extractSelectOptions(html, "exwfood_time_deli").filter((option) => !option.disabled);
+  if (timeSlots.length === 0 || timeSlots.every((option) => /No time slot/i.test(option.label))) {
+    timeSlots = DEFAULT_TIME_SLOTS.map((slot, index) => ({
+      value: slot,
+      label: slot,
+      selected: index === 0,
+      disabled: false
+    }));
+  }
+  const dateOptions = extractSelectOptions(html, "exwfood_date_deli").filter((option) => !option.disabled);
+  const fields = {};
+
+  for (const name of [
+    "billing_first_name",
+    "billing_last_name",
+    "billing_phone",
+    "billing_email",
+    "payment_method",
+    "woocommerce-process-checkout-nonce",
+    "_wp_http_referer"
+  ]) {
+    fields[name] = extractInput(html, name);
+  }
+
+  fields.exwfood_date_deli = dateOptions.find((option) => option.selected)?.value || dateOptions[0]?.value || "";
+  fields.exwfood_time_deli = timeSlots.find((option) => option.selected)?.value || timeSlots[0]?.value || "";
+  fields.exwf_auto_limit = extractInput(html, "exwf_auto_limit");
+  fields.exwf_dis_auto = extractInput(html, "exwf_dis_auto");
+
+  return {
+    empty: /cart is currently empty/i.test(html),
+    items: summaryRows,
+    total: parseMoney(html.match(/order-total[\s\S]*?<\/tr>/i)?.[0] || html),
+    timeSlots,
+    dateOptions,
+    fields
+  };
+}
+
+async function addToCart({ productId, date, quantity = 1 }) {
+  assertLoggedIn();
+  if (!productId || !date) throw new Error("Product and delivery date are required.");
+
+  const body = new URLSearchParams({
+    deli_date: date,
+    quantity: String(quantity || 1),
+    "add-to-cart": String(productId)
+  });
+  const response = await siteSession.request(`/lunch/?menu-date=${encodeURIComponent(date)}`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body
+  });
+  await response.text();
+  return parseCart(await readSitePage("/cart/"));
+}
+
+async function clearCart() {
+  assertLoggedIn();
+  let cart = parseCart(await readSitePage("/cart/"));
+  for (const item of cart.items) {
+    if (item.removeUrl) await siteSession.request(item.removeUrl);
+  }
+  cart = parseCart(await readSitePage("/cart/"));
+  return cart;
+}
+
+async function placeOrder({ timeSlot = "", notes = "" }) {
+  assertLoggedIn();
+  const checkoutHtml = await readSitePage("/checkout/");
+  const checkout = parseCheckout(checkoutHtml);
+  if (checkout.empty || checkout.items.length === 0) throw new Error("Cart is empty.");
+
+  const fields = checkout.fields;
+  const selectedTime = timeSlot || fields.exwfood_time_deli;
+  if (!selectedTime || /No time slot/i.test(selectedTime)) {
+    throw new Error("No delivery time slot is available for this cart.");
+  }
+
+  const body = new URLSearchParams({
+    billing_first_name: fields.billing_first_name,
+    billing_last_name: fields.billing_last_name,
+    billing_phone: fields.billing_phone,
+    billing_email: fields.billing_email,
+    exwf_auto_limit: fields.exwf_auto_limit,
+    exwf_dis_auto: fields.exwf_dis_auto,
+    exwfood_date_deli: fields.exwfood_date_deli,
+    exwfood_time_deli: selectedTime,
+    order_comments: notes,
+    payment_method: fields.payment_method || "bacs",
+    "woocommerce-process-checkout-nonce": fields["woocommerce-process-checkout-nonce"],
+    _wp_http_referer: fields._wp_http_referer || "/?wc-ajax=update_order_review",
+    woocommerce_checkout_place_order: "Place order"
+  });
+
+  const response = await siteSession.request("/?wc-ajax=checkout", {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "x-requested-with": "XMLHttpRequest",
+      accept: "application/json, text/javascript, */*; q=0.01"
+    },
+    body
+  });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = { result: response.ok ? "unknown" : "failure", messages: stripTags(text).slice(0, 500) };
+  }
+
+  if (payload.result !== "success") {
+    throw new Error(stripTags(payload.messages || "Checkout failed."));
+  }
+
+  return {
+    result: payload.result,
+    redirect: payload.redirect || "",
+    orders: parseOrders(await readSitePage("/orders/"))
+  };
+}
+
+async function placeBulkOrder({ selections = [], timeSlot = "", notes = "" }) {
+  assertLoggedIn();
+  if (!Array.isArray(selections) || selections.length === 0) {
+    throw new Error("Please select at least one meal.");
+  }
+
+  const results = [];
+  for (const selection of selections) {
+    await clearCart();
+    await addToCart({
+      productId: selection.productId,
+      date: selection.date,
+      quantity: selection.quantity || 1
+    });
+    const placed = await placeOrder({ timeSlot, notes });
+    results.push({
+      date: selection.date,
+      productId: selection.productId,
+      result: placed.result,
+      redirect: placed.redirect
+    });
+  }
+  await clearCart();
+
+  return {
+    result: "success",
+    placed: results,
+    orders: parseOrders(await readSitePage("/orders/"))
+  };
+}
+
+async function cancelOrder(cancelUrl) {
+  assertLoggedIn();
+  if (!cancelUrl || !cancelUrl.startsWith(SITE_ORIGIN)) {
+    throw new Error("A valid cafeteria cancel link is required.");
+  }
+
+  const response = await siteSession.request(cancelUrl);
+  await response.text();
+  return {
+    orders: parseOrders(await readSitePage("/orders/")),
+    cart: parseCart(await readSitePage("/cart/"))
+  };
+}
+
+function parseDates(html) {
+  const dates = [];
+  const optionPattern = /<option\b[^>]*data-date=["']([^"']+)["'][^>]*>([\s\S]*?)<\/option>/gi;
+  let match;
+
+  while ((match = optionPattern.exec(html))) {
+    dates.push({
+      date: match[1],
+      label: stripTags(match[2]),
+      url: `${SITE_ORIGIN}/lunch/?menu-date=${match[1]}`
+    });
+  }
+
+  return dates;
+}
+
+function splitStall(title) {
+  const separator = title.match(/[–-]/);
+  if (!separator) return { stall: "Other", item: title };
+
+  const stall = title.slice(0, separator.index).trim();
+  const item = title.slice(separator.index + 1).trim();
+  return {
+    stall: stall ? normalizeStall(stall) : "Other",
+    item: item || title
+  };
+}
+
+function parseProducts(html, date) {
+  const blocks = html
+    .split(/<div class="item-grid\b/)
+    .slice(1)
+    .map((block) => `<div class="item-grid${block.split(/<div class="item-grid\b/)[0]}`);
+
+  return blocks.map((block) => {
+    const titleMatch = block.match(/<h3>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h3>/i);
+    const priceMatch = block.match(/woocommerce-Price-currencySymbol[^>]*>[^<]*<\/span>\s*([0-9.]+)/i);
+    const imageMatch = block.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
+    const descMatch = block.match(/<div class="exwf-shdes">\s*<p>([\s\S]*?)<\/p>\s*<\/div>/i);
+    const stockMatch = block.match(/<p class="stock in-stock">([\s\S]*?)<\/p>/i);
+    const idMatch = block.match(/data-id_food=["']([^"']+)["']/i) || block.match(/name=["']add-to-cart["']\s+value=["']([^"']+)["']/i);
+
+    if (!titleMatch) return null;
+
+    const title = stripTags(titleMatch[2]);
+    const { stall, item } = splitStall(title);
+
+    return {
+      id: idMatch ? idMatch[1] : `${date}-${title}`,
+      date,
+      title,
+      stall,
+      item,
+      price: priceMatch ? `$${priceMatch[1]}` : "",
+      description: descMatch ? stripTags(descMatch[1]) : "",
+      stock: stockMatch ? stripTags(stockMatch[1]) : "",
+      productUrl: titleMatch[1],
+      imageUrl: imageMatch ? imageMatch[1] : ""
+    };
+  }).filter(Boolean);
+}
+
+async function loadMenus(force = false) {
+  const now = Date.now();
+  if (!force && cachedMenus && now - cachedAt < CACHE_MS) return cachedMenus;
+
+  const firstPage = await fetchHtml(LUNCH_URL);
+  const dates = parseDates(firstPage);
+  if (dates.length === 0) {
+    throw new Error("No selectable lunch dates were found.");
+  }
+
+  const settledDays = await Promise.allSettled(dates.map(async (day) => {
+    const html = await fetchHtml(day.url);
+    return {
+      ...day,
+      orderUrl: day.url,
+      products: parseProducts(html, day.date)
+    };
+  }));
+  const days = settledDays
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value);
+
+  if (days.length === 0) {
+    throw new Error("No lunch menu pages could be loaded.");
+  }
+
+  cachedMenus = {
+    source: LUNCH_URL,
+    fetchedAt: new Date().toISOString(),
+    days,
+    totalProducts: days.reduce((sum, day) => sum + day.products.length, 0)
+  };
+  cachedAt = now;
+  return cachedMenus;
+}
+
+function sendJson(response, status, payload) {
+  response.writeHead(status, { "content-type": contentTypes[".json"] });
+  response.end(JSON.stringify(payload));
+}
+
+async function readJsonBody(request) {
+  let body = "";
+  for await (const chunk of request) body += chunk;
+  return body ? JSON.parse(body) : {};
+}
+
+async function serveStatic(request, response) {
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
+  const filePath = path.normalize(path.join(PUBLIC_DIR, pathname));
+
+  if (!filePath.startsWith(PUBLIC_DIR)) {
+    response.writeHead(403);
+    response.end("Forbidden");
+    return;
+  }
+
+  try {
+    const body = await readFile(filePath);
+    response.writeHead(200, {
+      "content-type": contentTypes[path.extname(filePath)] || "application/octet-stream",
+      "cache-control": "no-store"
+    });
+    response.end(body);
+  } catch {
+    response.writeHead(404);
+    response.end("Not found");
+  }
+}
+
+const server = http.createServer(async (request, response) => {
+  try {
+    const url = new URL(request.url, `http://${request.headers.host}`);
+
+    if (url.pathname === "/api/menus") {
+      const force = url.searchParams.get("refresh") === "1";
+      sendJson(response, 200, await loadMenus(force));
+      return;
+    }
+
+    if (url.pathname === "/api/login" && request.method === "POST") {
+      const { username, password } = await readJsonBody(request);
+      if (!username || !password) throw new Error("Username and password are required.");
+      sendJson(response, 200, { account: await loginToSite(username, password) });
+      return;
+    }
+
+    if (url.pathname === "/api/logout" && request.method === "POST") {
+      siteSession.reset();
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === "/api/session") {
+      sendJson(response, 200, { account: siteSession.account });
+      return;
+    }
+
+    if (url.pathname === "/api/wallet") {
+      assertLoggedIn();
+      const wallet = parseWallet(await readSitePage("/woo-wallet/"));
+      sendJson(response, 200, { balance: wallet.balance });
+      return;
+    }
+
+    if (url.pathname === "/api/orders") {
+      assertLoggedIn();
+      sendJson(response, 200, { orders: parseOrders(await readSitePage("/orders/")) });
+      return;
+    }
+
+    if (url.pathname === "/api/order/cancel" && request.method === "POST") {
+      const { cancelUrl } = await readJsonBody(request);
+      sendJson(response, 200, await cancelOrder(cancelUrl));
+      return;
+    }
+
+    if (url.pathname === "/api/cart") {
+      assertLoggedIn();
+      sendJson(response, 200, parseCart(await readSitePage("/cart/")));
+      return;
+    }
+
+    if (url.pathname === "/api/cart/add" && request.method === "POST") {
+      sendJson(response, 200, await addToCart(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/api/cart/clear" && request.method === "POST") {
+      sendJson(response, 200, await clearCart());
+      return;
+    }
+
+    if (url.pathname === "/api/checkout") {
+      assertLoggedIn();
+      sendJson(response, 200, parseCheckout(await readSitePage("/checkout/")));
+      return;
+    }
+
+    if (url.pathname === "/api/order/place" && request.method === "POST") {
+      sendJson(response, 200, await placeOrder(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/api/order/bulk" && request.method === "POST") {
+      sendJson(response, 200, await placeBulkOrder(await readJsonBody(request)));
+      return;
+    }
+
+    await serveStatic(request, response);
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: error.message });
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`Shimano lunch viewer: http://localhost:${PORT}`);
+});

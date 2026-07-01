@@ -1,0 +1,44 @@
+{
+  "name": "soodering",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SooDering cafeteria lunch ordering helper.",
+  "main": "electron-main.js",
+  "scripts": {
+    "start": "node server.js",
+    "electron": "electron .",
+    "build:mac": "electron-packager . SooDering --platform=darwin --arch=arm64 --out=dist --overwrite --prune=true --ignore=\"^/ios($|/)\" --ignore=\"^/dist($|/)\"",
+    "build:win": "electron-packager . SooDering --platform=win32 --arch=x64 --out=dist --overwrite --prune=true --ignore=\"^/ios($|/)\" --ignore=\"^/dist($|/)\"",
+    "build:portable": "electron-builder --win portable --x64"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.15.3",
+    "electron-packager": "^17.1.2"
+  },
+  "build": {
+    "appId": "com.soodering.app",
+    "productName": "SooDering",
+    "directories": {
+      "output": "dist-portable"
+    },
+    "files": [
+      "electron-main.js",
+      "server.js",
+      "package.json",
+      "public/**/*"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "SooDering-Portable.exe"
+    },
+    "asar": true
+  }
+}

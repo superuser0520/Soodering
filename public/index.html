@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SooDering</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="loginScreen" class="login-screen">
+        <form id="loginForm" class="panel auth-panel">
+          <div>
+            <p class="eyebrow">Cafeteria Helper</p>
+            <h1>SooDering</h1>
+            <p id="accountStatus" class="meta">Sign in to order lunch.</p>
+          </div>
+          <label for="usernameInput">
+            Email
+            <input id="usernameInput" name="username" type="email" autocomplete="username" placeholder="name@shimano.com.sg">
+          </label>
+          <label for="passwordInput">
+            Password
+            <input id="passwordInput" name="password" type="password" autocomplete="current-password">
+          </label>
+          <label class="remember-row" for="rememberInput">
+            <input id="rememberInput" name="remember" type="checkbox">
+            <span>Remember my login on this device</span>
+          </label>
+          <button id="loginButton" type="submit">
+            <span class="icon" aria-hidden="true">↗</span>
+            <span>Login</span>
+          </button>
+        </form>
+      </section>
+
+      <section id="appScreen" class="app-screen" hidden>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Cafeteria Helper</p>
+            <h1>SooDering 🍱</h1>
+            <p id="signedInLabel" class="meta"></p>
+          </div>
+          <div class="top-actions">
+            <div class="wallet-chip" aria-label="Wallet balance">
+              <span class="wallet-icon" aria-hidden="true">💳</span>
+              <strong id="walletBalance">-</strong>
+            </div>
+            <button id="refreshButton" class="secondary icon-button" type="button" aria-label="Refresh">
+              <span class="icon" aria-hidden="true">↻</span>
+            </button>
+            <button id="logoutButton" class="secondary icon-button" type="button" aria-label="Logout">
+              <span class="icon" aria-hidden="true">↙</span>
+            </button>
+          </div>
+        </header>
+
+        <nav class="app-tabs" aria-label="SooDering sections">
+          <button id="menuTabButton" class="tab-button selected" type="button" data-tab="menu">🍱 Menu</button>
+          <button id="ordersTabButton" class="tab-button" type="button" data-tab="orders">🧾 Upcoming <span id="ordersTabCount" class="tab-count">0</span></button>
+        </nav>
+
+        <section id="ordersView" class="tab-panel" hidden>
+          <section class="panel orders-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Upcoming orders</h2>
+                <p class="meta">Reserved meals from today onward.</p>
+              </div>
+            </div>
+            <div id="ordersList" class="compact-list"></div>
+          </section>
+        </section>
+
+        <section id="menuView" class="tab-panel">
+        <section class="panel basket-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Selected meals 🛒</h2>
+              <p id="cartStatus" class="meta">Pick meals for one or more dates.</p>
+            </div>
+            <button id="clearSelectionButton" class="secondary" type="button">Clear</button>
+          </div>
+          <div id="cartList" class="compact-list"></div>
+          <div class="checkout-panel">
+            <button id="placeOrderButton" type="button">
+              <span class="icon" aria-hidden="true">✅</span>
+              <span>Place order</span>
+            </button>
+          </div>
+        </section>
+
+        <p id="status" class="status">Loading cafeteria menus...</p>
+        <section class="menu-filter" aria-label="Menu date filter">
+          <button class="filter-button selected" type="button" data-filter="all">All</button>
+          <button class="filter-button" type="button" data-filter="ordered">Ordered</button>
+          <button class="filter-button" type="button" data-filter="not-ordered">Not ordered</button>
+        </section>
+        <section id="menus" class="menus" aria-live="polite"></section>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js?v=7"></script>
+  </body>
+</html>
