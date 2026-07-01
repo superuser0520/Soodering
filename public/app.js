@@ -8,6 +8,7 @@ const DEFAULT_TIME_SLOTS = [
 const CREDENTIALS_KEY = "soodering.credentials";
 const LEGACY_CREDENTIALS_KEY = "shimanoLunch.credentials";
 const MONTHLY_CREDIT = 100;
+const KEEPALIVE_MS = 4 * 60 * 1000;
 const SG_PUBLIC_HOLIDAYS = new Set([
   "2026-01-01",
   "2026-02-17",
@@ -162,16 +163,32 @@ async function loginWithRememberedCredentials() {
   return true;
 }
 
-async function apiWithRelogin(path, options = {}) {
+async function apiWithRelogin(path, options = {}, statusTarget = cartStatus) {
   try {
     return await api(path, options);
   } catch (error) {
     if (!/log in to the cafeteria account/i.test(error.message || "")) throw error;
 
-    cartStatus.textContent = "Cafeteria login expired. Reconnecting...";
+    if (statusTarget) statusTarget.textContent = "Refreshing cafeteria login...";
     const loggedIn = await loginWithRememberedCredentials();
     if (!loggedIn) throw error;
     return api(path, options);
+  }
+}
+
+async function keepCafeteriaSessionAlive() {
+  if (!state.account) {
+    const restored = await loginWithRememberedCredentials();
+    if (!restored) return;
+  }
+
+  try {
+    const data = await apiWithRelogin("/api/keepalive", { headers: {} }, null);
+    if (data.account) state.account = data.account;
+    if (data.balance) renderWallet({ balance: data.balance });
+    renderAccount();
+  } catch {
+    // Keepalive is best-effort; normal actions still show actionable errors.
   }
 }
 
@@ -481,6 +498,9 @@ async function refreshAccountData() {
 async function loadSession() {
   const data = await api("/api/session", { headers: {} });
   state.account = data.account;
+  if (!state.account) {
+    await loginWithRememberedCredentials();
+  }
   renderAccount();
   renderBasket();
   await refreshAccountData();
@@ -640,3 +660,4 @@ fillRememberedCredentials();
 renderActiveTab();
 loadSession().catch(() => {});
 loadMenus();
+setInterval(keepCafeteriaSessionAlive, KEEPALIVE_MS);

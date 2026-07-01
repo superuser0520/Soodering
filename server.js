@@ -154,12 +154,14 @@ function createSiteSession() {
 
   return {
     account: null,
+    credentials: null,
     touchedAt: Date.now(),
     cookies,
     request,
-    reset() {
+    reset({ clearCredentials = true } = {}) {
       cookies.clear();
       this.account = null;
+      if (clearCredentials) this.credentials = null;
       this.touchedAt = Date.now();
     }
   };
@@ -209,10 +211,35 @@ function assertLoggedIn(session) {
   }
 }
 
+async function ensureLoggedIn(session) {
+  if (session.account) return;
+  if (session.credentials?.username && session.credentials?.password) {
+    await loginToSite(session, session.credentials.username, session.credentials.password);
+    return;
+  }
+  assertLoggedIn(session);
+}
+
 async function readSitePage(session, pathname) {
   const response = await session.request(pathname);
   if (!response.ok) throw new Error(`Cafeteria page failed: ${response.status}`);
   return response.text();
+}
+
+function looksLoggedOut(html) {
+  return /woocommerce-form-login|name=["']username["']|name=["']password["']/i.test(html)
+    && !/customer-logout|woocommerce-MyAccount-navigation|Hello\s*<strong>/i.test(html);
+}
+
+async function readProtectedPage(session, pathname) {
+  await ensureLoggedIn(session);
+  let html = await readSitePage(session, pathname);
+  if (looksLoggedOut(html) && session.credentials?.username && session.credentials?.password) {
+    session.reset({ clearCredentials: false });
+    await loginToSite(session, session.credentials.username, session.credentials.password);
+    html = await readSitePage(session, pathname);
+  }
+  return html;
 }
 
 function parseAccount(html) {
@@ -225,7 +252,7 @@ function parseAccount(html) {
 }
 
 async function loginToSite(session, username, password) {
-  session.reset();
+  session.reset({ clearCredentials: false });
   const loginHtml = await readSitePage(session, "/");
   const body = new URLSearchParams({
     username,
@@ -253,6 +280,7 @@ async function loginToSite(session, username, password) {
     name: account.name || username,
     staffId: account.staffId
   };
+  session.credentials = { username, password };
   return session.account;
 }
 
@@ -384,7 +412,7 @@ function parseCheckout(html) {
 }
 
 async function addToCart(session, { productId, date, quantity = 1 }) {
-  assertLoggedIn(session);
+  await ensureLoggedIn(session);
   if (!productId || !date) throw new Error("Product and delivery date are required.");
 
   const body = new URLSearchParams({
@@ -398,22 +426,22 @@ async function addToCart(session, { productId, date, quantity = 1 }) {
     body
   });
   await response.text();
-  return parseCart(await readSitePage(session, "/cart/"));
+  return parseCart(await readProtectedPage(session, "/cart/"));
 }
 
 async function clearCart(session) {
-  assertLoggedIn(session);
-  let cart = parseCart(await readSitePage(session, "/cart/"));
+  await ensureLoggedIn(session);
+  let cart = parseCart(await readProtectedPage(session, "/cart/"));
   for (const item of cart.items) {
     if (item.removeUrl) await session.request(item.removeUrl);
   }
-  cart = parseCart(await readSitePage(session, "/cart/"));
+  cart = parseCart(await readProtectedPage(session, "/cart/"));
   return cart;
 }
 
 async function placeOrder(session, { timeSlot = "", notes = "" }) {
-  assertLoggedIn(session);
-  const checkoutHtml = await readSitePage(session, "/checkout/");
+  await ensureLoggedIn(session);
+  const checkoutHtml = await readProtectedPage(session, "/checkout/");
   const checkout = parseCheckout(checkoutHtml);
   if (checkout.empty || checkout.items.length === 0) throw new Error("Cart is empty.");
 
@@ -468,7 +496,7 @@ async function placeOrder(session, { timeSlot = "", notes = "" }) {
 }
 
 async function placeBulkOrder(session, { selections = [], timeSlot = "", notes = "" }) {
-  assertLoggedIn(session);
+  await ensureLoggedIn(session);
   if (!Array.isArray(selections) || selections.length === 0) {
     throw new Error("Please select at least one meal.");
   }
@@ -499,7 +527,7 @@ async function placeBulkOrder(session, { selections = [], timeSlot = "", notes =
 }
 
 async function cancelOrder(session, cancelUrl) {
-  assertLoggedIn(session);
+  await ensureLoggedIn(session);
   if (!cancelUrl || !cancelUrl.startsWith(SITE_ORIGIN)) {
     throw new Error("A valid cafeteria cancel link is required.");
   }
@@ -508,17 +536,17 @@ async function cancelOrder(session, cancelUrl) {
   await response.text();
   return {
     orders: await loadOrders(session),
-    cart: parseCart(await readSitePage(session, "/cart/"))
+    cart: parseCart(await readProtectedPage(session, "/cart/"))
   };
 }
 
 async function loadOrders(session) {
-  assertLoggedIn(session);
+  await ensureLoggedIn(session);
   const paths = ["/orders/", ...Array.from({ length: 5 }, (_, index) => `/orders/${index + 2}`)];
   const pages = [];
   for (const pathname of paths) {
     try {
-      const html = await readSitePage(session, pathname);
+      const html = await readProtectedPage(session, pathname);
       const parsed = parseOrders(html);
       if (parsed.length > 0) pages.push(parsed);
     } catch {
@@ -697,9 +725,20 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/api/keepalive") {
+      await ensureLoggedIn(session);
+      const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
+      sendJson(response, 200, {
+        account: session.account,
+        balance: wallet.balance,
+        keptAliveAt: new Date().toISOString()
+      });
+      return;
+    }
+
     if (url.pathname === "/api/wallet") {
-      assertLoggedIn(session);
-      const wallet = parseWallet(await readSitePage(session, "/woo-wallet/"));
+      await ensureLoggedIn(session);
+      const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
       sendJson(response, 200, { balance: wallet.balance });
       return;
     }
@@ -716,8 +755,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/cart") {
-      assertLoggedIn(session);
-      sendJson(response, 200, parseCart(await readSitePage(session, "/cart/")));
+      await ensureLoggedIn(session);
+      sendJson(response, 200, parseCart(await readProtectedPage(session, "/cart/")));
       return;
     }
 
@@ -732,8 +771,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/checkout") {
-      assertLoggedIn(session);
-      sendJson(response, 200, parseCheckout(await readSitePage(session, "/checkout/")));
+      await ensureLoggedIn(session);
+      sendJson(response, 200, parseCheckout(await readProtectedPage(session, "/checkout/")));
       return;
     }
 
