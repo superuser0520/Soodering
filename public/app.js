@@ -9,7 +9,7 @@ const CREDENTIALS_KEY = "soodering.credentials";
 const LEGACY_CREDENTIALS_KEY = "shimanoLunch.credentials";
 const MONTHLY_CREDIT = 100;
 const KEEPALIVE_MS = 4 * 60 * 1000;
-const QUICK_ORDER_EXCLUDED_ITEMS = /economic\s*rice|nasi\s*padang/i;
+const QUICK_ORDER_EXCLUDED_ITEMS = /economic\s*rice|nasi\s*padang|vegetarian\s*set/i;
 const SG_PUBLIC_HOLIDAYS = new Set([
   "2026-01-01",
   "2026-02-17",
@@ -493,13 +493,10 @@ async function quickOrder(stallName) {
 function renderProduct(product) {
   const orders = ordersForProduct(product);
   const orderedQuantity = orders.reduce((sum, order) => sum + parseOrderQuantity(order.product), 0);
-  const image = product.imageUrl
-    ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.title)}" loading="lazy">`
-    : `<span class="food-logo">🍽️</span>`;
 
   return `
     <li class="menu-item ${orders.length ? "ordered-item" : ""}">
-      <a class="thumb" href="${escapeHtml(product.productUrl)}" target="_blank" rel="noreferrer">${image}</a>
+      <a class="thumb" href="${escapeHtml(product.productUrl)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(product.title)}"><span class="food-logo">🍱</span></a>
       <div class="menu-copy">
         <p class="stall">${escapeHtml(product.stall)}</p>
         <h3>${escapeHtml(product.item)}</h3>

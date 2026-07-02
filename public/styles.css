@@ -516,15 +516,9 @@ button.is-loading::after {
   width: 58px;
 }
 
-.thumb img {
-  height: 100%;
-  object-fit: cover;
-  width: 100%;
-}
-
 .food-logo {
   color: var(--brand-dark);
-  font-size: 11px;
+  font-size: 26px;
   font-weight: 950;
 }
 
