@@ -9,6 +9,7 @@ const CREDENTIALS_KEY = "soodering.credentials";
 const LEGACY_CREDENTIALS_KEY = "shimanoLunch.credentials";
 const MONTHLY_CREDIT = 100;
 const KEEPALIVE_MS = 4 * 60 * 1000;
+const QUICK_ORDER_EXCLUDED_ITEMS = /economic\s*rice|nasi\s*padang/i;
 const SG_PUBLIC_HOLIDAYS = new Set([
   "2026-01-01",
   "2026-02-17",
@@ -384,8 +385,28 @@ function weekdayProductsForStall(stallName) {
   return state.data.days
     .filter((day) => isWeekday(day.date))
     .filter((day) => !state.orderedDates?.has(day.date))
-    .map((day) => day.products.find((product) => product.stall.toLowerCase() === stallName.toLowerCase()))
+    .map((day) => day.products.find((product) => {
+      const productName = `${product.title} ${product.item}`;
+      return product.stall.toLowerCase() === stallName.toLowerCase()
+        && !QUICK_ORDER_EXCLUDED_ITEMS.test(productName);
+    }))
     .filter(Boolean);
+}
+
+function setMenuLoading(isLoading, message) {
+  refreshButton.disabled = isLoading;
+  menusEl.classList.toggle("is-loading", isLoading);
+  statusEl.classList.toggle("loading-message", isLoading);
+  if (message) statusEl.textContent = message;
+}
+
+function setOrderingProgress(isOrdering, message) {
+  placeOrderButton.disabled = isOrdering || selectedItems().length === 0;
+  quickChineseButton.disabled = isOrdering;
+  quickMalayButton.disabled = isOrdering;
+  placeOrderButton.classList.toggle("is-loading", isOrdering);
+  cartStatus.classList.toggle("loading-message", isOrdering);
+  if (message) cartStatus.textContent = message;
 }
 
 function renderBasket() {
@@ -450,7 +471,7 @@ async function quickOrder(stallName) {
 
   const products = weekdayProductsForStall(stallName);
   if (products.length === 0) {
-    cartStatus.textContent = `No unordered weekday ${stallName} items are available.`;
+    cartStatus.textContent = `No unordered weekday ${stallName} items are available after skipping Economic Rice and Nasi Padang.`;
     return;
   }
 
@@ -458,21 +479,14 @@ async function quickOrder(stallName) {
   const confirmed = window.confirm(`Quick order ${stallName} for ${products.length} weekday${products.length === 1 ? "" : "s"}?\n\n${summary}\n\nTime: 11:30 - 11:55`);
   if (!confirmed) return;
 
-  quickChineseButton.disabled = true;
-  quickMalayButton.disabled = true;
-  placeOrderButton.disabled = true;
-  placeOrderButton.classList.add("is-loading");
-  cartStatus.textContent = `Placing ${stallName} weekday orders...`;
+  setOrderingProgress(true, `Ordering ${stallName} weekdays...`);
 
   try {
     await submitProducts(products, `${stallName} weekday orders placed successfully.`);
   } catch (error) {
     cartStatus.textContent = error.message || "Quick order failed. Please refresh and try again.";
   } finally {
-    quickChineseButton.disabled = false;
-    quickMalayButton.disabled = false;
-    placeOrderButton.disabled = false;
-    placeOrderButton.classList.remove("is-loading");
+    setOrderingProgress(false);
   }
 }
 
@@ -548,9 +562,7 @@ function renderMenus() {
 }
 
 async function loadMenus(refresh = false) {
-  refreshButton.disabled = true;
-  menusEl.classList.add("is-loading");
-  statusEl.textContent = refresh ? "Refreshing menus..." : "Loading cafeteria menus...";
+  setMenuLoading(true, refresh ? "Refreshing menus..." : "Loading cafeteria menus...");
 
   try {
     state.data = await api(`/api/menus${refresh ? "?refresh=1" : ""}`, { headers: {} });
@@ -559,8 +571,7 @@ async function loadMenus(refresh = false) {
     statusEl.textContent = error.message;
     menusEl.innerHTML = "";
   } finally {
-    refreshButton.disabled = false;
-    menusEl.classList.remove("is-loading");
+    setMenuLoading(false);
   }
 }
 
@@ -749,16 +760,13 @@ placeOrderButton.addEventListener("click", async () => {
   const confirmed = window.confirm(`Place these cafeteria reservations now?\n\n${summary}\n\nTime: 11:30 - 11:55`);
   if (!confirmed) return;
 
-  placeOrderButton.disabled = true;
-  placeOrderButton.classList.add("is-loading");
-  cartStatus.textContent = "Placing selected orders...";
+  setOrderingProgress(true, "Ordering selected meals...");
   try {
     await submitProducts(selections, "Order placed successfully.");
   } catch (error) {
     cartStatus.textContent = error.message || "Order failed. Please refresh and try again.";
   } finally {
-    placeOrderButton.disabled = false;
-    placeOrderButton.classList.remove("is-loading");
+    setOrderingProgress(false);
   }
 });
 
