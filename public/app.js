@@ -10,6 +10,7 @@ const LEGACY_CREDENTIALS_KEY = "shimanoLunch.credentials";
 const MONTHLY_CREDIT = 100;
 const KEEPALIVE_MS = 4 * 60 * 1000;
 const QUICK_ORDER_EXCLUDED_ITEMS = /economic\s*rice|nasi\s*padang|vegetarian\s*set/i;
+const USAGE_ADMIN_EMAIL = "soolihjing@shimano.com.sg";
 const SG_PUBLIC_HOLIDAYS = new Set([
   "2026-01-01",
   "2026-02-17",
@@ -48,6 +49,8 @@ const state = {
   upcomingOrders: [],
   ordersLoaded: false,
   ordersLoading: false,
+  usageLoaded: false,
+  usageLoading: false,
   walletLoading: false
 };
 
@@ -83,6 +86,11 @@ const menuFilter = document.querySelector(".menu-filter");
 const tabButtons = document.querySelectorAll(".tab-button");
 const menuView = document.querySelector("#menuView");
 const ordersView = document.querySelector("#ordersView");
+const usageView = document.querySelector("#usageView");
+const usageTabButton = document.querySelector("#usageTabButton");
+const usageRefreshButton = document.querySelector("#usageRefreshButton");
+const usageList = document.querySelector("#usageList");
+const usageStatus = document.querySelector("#usageStatus");
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, (char) => ({
@@ -220,6 +228,21 @@ function formatMoney(value) {
   return `$${Number(value || 0).toFixed(2)}`;
 }
 
+function canViewUsage() {
+  return (state.account?.username || "").toLowerCase() === USAGE_ADMIN_EMAIL;
+}
+
+function formatDateTime(value) {
+  return new Intl.DateTimeFormat("en-SG", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date(value));
+}
+
 function isWeekday(date) {
   const day = new Date(`${date}T00:00:00`).getDay();
   return day >= 1 && day <= 5;
@@ -333,6 +356,11 @@ function renderAccount() {
     loginScreen.hidden = false;
     appScreen.hidden = true;
   }
+  usageTabButton.hidden = !canViewUsage();
+  if (!canViewUsage() && state.activeTab === "usage") {
+    state.activeTab = "menu";
+    renderActiveTab();
+  }
 }
 
 function renderWallet(wallet) {
@@ -347,6 +375,7 @@ function renderActiveTab() {
   });
   menuView.hidden = state.activeTab !== "menu";
   ordersView.hidden = state.activeTab !== "orders";
+  usageView.hidden = state.activeTab !== "usage";
 }
 
 function renderOrders(payload) {
@@ -374,6 +403,35 @@ function renderOrders(payload) {
   `).join("") || `<p class="meta">No upcoming orders from today onward.</p>`;
   renderCredit();
   renderMenus();
+}
+
+function describeUsage(entry) {
+  const parts = [entry.action];
+  if (entry.user) parts.push(entry.user);
+  if (entry.balance) parts.push(`balance ${entry.balance}`);
+  if (entry.days) parts.push(`${entry.days} menu days`);
+  if (entry.products) parts.push(`${entry.products} products`);
+  if (entry.count !== undefined) parts.push(`${entry.count} records`);
+  if (entry.requested !== undefined) parts.push(`${entry.requested} requested`);
+  if (entry.placed !== undefined) parts.push(`${entry.placed} placed`);
+  if (entry.items !== undefined) parts.push(`${entry.items} item${entry.items === 1 ? "" : "s"}`);
+  if (entry.total) parts.push(`total ${entry.total}`);
+  if (entry.status) parts.push(`status ${entry.status}`);
+  if (entry.message) parts.push(entry.message);
+  return parts.join(" · ");
+}
+
+function renderUsage(entries) {
+  usageStatus.textContent = `${entries.length} recent log entr${entries.length === 1 ? "y" : "ies"}.`;
+  usageList.innerHTML = entries.map((entry) => `
+    <div class="usage-row">
+      <div>
+        <strong>${escapeHtml(entry.action)}</strong>
+        <p class="meta">${escapeHtml(describeUsage(entry))}</p>
+      </div>
+      <time>${escapeHtml(formatDateTime(entry.at))}</time>
+    </div>
+  `).join("") || `<p class="empty-state">No usage recorded yet.</p>`;
 }
 
 function selectedItems() {
@@ -607,6 +665,28 @@ async function loadOrders({ force = false } = {}) {
   }
 }
 
+async function loadUsage({ force = false } = {}) {
+  if (!canViewUsage()) return;
+  if (state.usageLoading) return;
+  if (state.usageLoaded && !force) return;
+
+  state.usageLoading = true;
+  usageRefreshButton.disabled = true;
+  usageStatus.textContent = "Loading usage log...";
+
+  try {
+    const data = await api("/api/usage?limit=100", { headers: {} });
+    state.usageLoaded = true;
+    renderUsage(data.entries || []);
+  } catch (error) {
+    usageStatus.textContent = error.message;
+    usageList.innerHTML = "";
+  } finally {
+    state.usageLoading = false;
+    usageRefreshButton.disabled = false;
+  }
+}
+
 async function refreshAccountData({ includeOrders = false, forceOrders = false } = {}) {
   if (!state.account) return;
   await loadWallet();
@@ -634,6 +714,8 @@ tabButtons.forEach((button) => {
     renderActiveTab();
     if (state.activeTab === "orders") {
       loadOrders();
+    } else if (state.activeTab === "usage") {
+      loadUsage();
     }
   });
 });
@@ -689,13 +771,19 @@ logoutButton.addEventListener("click", async () => {
   state.walletBalance = "";
   state.ordersLoaded = false;
   state.ordersLoading = false;
+  state.usageLoaded = false;
+  state.usageLoading = false;
   renderAccount();
   walletBalance.textContent = "-";
   ordersList.innerHTML = "";
+  usageList.innerHTML = "";
+  usageStatus.textContent = "Recent SooDering activity.";
   renderCredit();
   fillRememberedCredentials();
   renderBasket();
 });
+
+usageRefreshButton.addEventListener("click", () => loadUsage({ force: true }));
 
 ordersList.addEventListener("click", async (event) => {
   const button = event.target.closest(".cancel-order-button");

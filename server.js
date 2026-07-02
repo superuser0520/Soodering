@@ -22,6 +22,7 @@ let cachedAt = 0;
 const CACHE_MS = 5 * 60 * 1000;
 const SESSION_COOKIE = "soodering_sid";
 const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
+const USAGE_ADMIN_EMAIL = "soolihjing@shimano.com.sg";
 const sessions = new Map();
 
 const contentTypes = {
@@ -232,6 +233,15 @@ async function readUsageLog(limit = 100) {
     return body.trim().split("\n").filter(Boolean).slice(-limit).reverse().map((line) => JSON.parse(line));
   } catch (error) {
     if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function assertUsageAdmin(session) {
+  assertLoggedIn(session);
+  if ((session.account?.username || "").toLowerCase() !== USAGE_ADMIN_EMAIL) {
+    const error = new Error("Usage log is only available to the owner account.");
+    error.status = 403;
     throw error;
   }
 }
@@ -860,6 +870,7 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/usage") {
       await ensureLoggedIn(session);
+      assertUsageAdmin(session);
       const limit = Math.min(Number(url.searchParams.get("limit") || 100), 500);
       const entries = await readUsageLog(limit);
       await trackUsage(request, session, "usage.view", { count: entries.length });

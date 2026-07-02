@@ -60,6 +60,7 @@
         <nav class="app-tabs" aria-label="SooDering sections">
           <button id="menuTabButton" class="tab-button selected" type="button" data-tab="menu">🍱 Menu</button>
           <button id="ordersTabButton" class="tab-button" type="button" data-tab="orders">🧾 Upcoming <span id="ordersTabCount" class="tab-count">0</span></button>
+          <button id="usageTabButton" class="tab-button" type="button" data-tab="usage" hidden>📈 Usage</button>
         </nav>
 
         <section id="creditPanel" class="panel credit-panel" hidden>
@@ -96,6 +97,19 @@
           </section>
         </section>
 
+        <section id="usageView" class="tab-panel" hidden>
+          <section class="panel usage-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Usage log</h2>
+                <p id="usageStatus" class="meta">Recent SooDering activity.</p>
+              </div>
+              <button id="usageRefreshButton" class="secondary" type="button">Refresh</button>
+            </div>
+            <div id="usageList" class="usage-list"></div>
+          </section>
+        </section>
+
         <section id="menuView" class="tab-panel">
         <section class="panel basket-panel">
           <div class="panel-heading">
@@ -129,6 +143,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=14"></script>
+    <script src="/app.js?v=15"></script>
   </body>
 </html>
