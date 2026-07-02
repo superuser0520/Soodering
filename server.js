@@ -1,12 +1,14 @@
 const http = require("node:http");
 const crypto = require("node:crypto");
-const { readFile } = require("node:fs/promises");
+const { appendFile, mkdir, readFile } = require("node:fs/promises");
 const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = "https://ssip-cafeteria.whew.life";
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
 const PUBLIC_DIR = path.join(__dirname, "public");
+const DATA_DIR = path.join(__dirname, "data");
+const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
 const DEFAULT_TIME_SLOTS = [
   "11:30 - 11:55",
   "12:00 - 12:25",
@@ -194,6 +196,44 @@ function getRequestSession(request, response) {
 
   session.touchedAt = Date.now();
   return session;
+}
+
+function shortSessionId(request) {
+  const cookies = parseCookies(request.headers.cookie || "");
+  const id = cookies[SESSION_COOKIE] || "";
+  return id ? id.slice(0, 8) : "new";
+}
+
+function usageUser(session) {
+  return session.account?.username || session.credentials?.username || "";
+}
+
+async function trackUsage(request, session, action, details = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    action,
+    user: usageUser(session),
+    session: shortSessionId(request),
+    method: request.method,
+    path: new URL(request.url, `http://${request.headers.host}`).pathname,
+    ...details
+  };
+  try {
+    await mkdir(DATA_DIR, { recursive: true });
+    await appendFile(USAGE_LOG, `${JSON.stringify(entry)}\n`);
+  } catch (error) {
+    console.warn(`Usage log failed: ${error.message}`);
+  }
+}
+
+async function readUsageLog(limit = 100) {
+  try {
+    const body = await readFile(USAGE_LOG, "utf8");
+    return body.trim().split("\n").filter(Boolean).slice(-limit).reverse().map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 function cleanupSessions() {
@@ -703,18 +743,26 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/menus") {
       const force = url.searchParams.get("refresh") === "1";
-      sendJson(response, 200, await loadMenus(force));
+      const menus = await loadMenus(force);
+      await trackUsage(request, session, force ? "menus.refresh" : "menus.load", {
+        days: menus.days.length,
+        products: menus.totalProducts
+      });
+      sendJson(response, 200, menus);
       return;
     }
 
     if (url.pathname === "/api/login" && request.method === "POST") {
       const { username, password } = await readJsonBody(request);
       if (!username || !password) throw new Error("Username and password are required.");
-      sendJson(response, 200, { account: await loginToSite(session, username, password) });
+      const account = await loginToSite(session, username, password);
+      await trackUsage(request, session, "login.success");
+      sendJson(response, 200, { account });
       return;
     }
 
     if (url.pathname === "/api/logout" && request.method === "POST") {
+      await trackUsage(request, session, "logout");
       session.reset();
       sendJson(response, 200, { ok: true });
       return;
@@ -728,6 +776,7 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/keepalive") {
       await ensureLoggedIn(session);
       const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
+      await trackUsage(request, session, "session.keepalive");
       sendJson(response, 200, {
         account: session.account,
         balance: wallet.balance,
@@ -739,55 +788,99 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/wallet") {
       await ensureLoggedIn(session);
       const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
+      await trackUsage(request, session, "wallet.view", { balance: wallet.balance });
       sendJson(response, 200, { balance: wallet.balance });
       return;
     }
 
     if (url.pathname === "/api/orders") {
-      sendJson(response, 200, { orders: await loadOrders(session) });
+      const orders = await loadOrders(session);
+      await trackUsage(request, session, "orders.view", { count: orders.length });
+      sendJson(response, 200, { orders });
       return;
     }
 
     if (url.pathname === "/api/order/cancel" && request.method === "POST") {
       const { cancelUrl } = await readJsonBody(request);
-      sendJson(response, 200, await cancelOrder(session, cancelUrl));
+      const result = await cancelOrder(session, cancelUrl);
+      await trackUsage(request, session, "order.cancel", { orders: result.orders.length });
+      sendJson(response, 200, result);
       return;
     }
 
     if (url.pathname === "/api/cart") {
       await ensureLoggedIn(session);
-      sendJson(response, 200, parseCart(await readProtectedPage(session, "/cart/")));
+      const cart = parseCart(await readProtectedPage(session, "/cart/"));
+      await trackUsage(request, session, "cart.view", { items: cart.items.length, total: cart.total });
+      sendJson(response, 200, cart);
       return;
     }
 
     if (url.pathname === "/api/cart/add" && request.method === "POST") {
-      sendJson(response, 200, await addToCart(session, await readJsonBody(request)));
+      const body = await readJsonBody(request);
+      const cart = await addToCart(session, body);
+      await trackUsage(request, session, "cart.add", { productId: body.productId, date: body.date, items: cart.items.length });
+      sendJson(response, 200, cart);
       return;
     }
 
     if (url.pathname === "/api/cart/clear" && request.method === "POST") {
-      sendJson(response, 200, await clearCart(session));
+      const cart = await clearCart(session);
+      await trackUsage(request, session, "cart.clear");
+      sendJson(response, 200, cart);
       return;
     }
 
     if (url.pathname === "/api/checkout") {
       await ensureLoggedIn(session);
-      sendJson(response, 200, parseCheckout(await readProtectedPage(session, "/checkout/")));
+      const checkout = parseCheckout(await readProtectedPage(session, "/checkout/"));
+      await trackUsage(request, session, "checkout.view", { items: checkout.items.length, total: checkout.total });
+      sendJson(response, 200, checkout);
       return;
     }
 
     if (url.pathname === "/api/order/place" && request.method === "POST") {
-      sendJson(response, 200, await placeOrder(session, await readJsonBody(request)));
+      const result = await placeOrder(session, await readJsonBody(request));
+      await trackUsage(request, session, "order.place", { result: result.result });
+      sendJson(response, 200, result);
       return;
     }
 
     if (url.pathname === "/api/order/bulk" && request.method === "POST") {
-      sendJson(response, 200, await placeBulkOrder(session, await readJsonBody(request)));
+      const body = await readJsonBody(request);
+      const result = await placeBulkOrder(session, body);
+      await trackUsage(request, session, "order.bulk", {
+        result: result.result,
+        requested: Array.isArray(body.selections) ? body.selections.length : 0,
+        placed: result.placed.length
+      });
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/api/usage") {
+      await ensureLoggedIn(session);
+      const limit = Math.min(Number(url.searchParams.get("limit") || 100), 500);
+      const entries = await readUsageLog(limit);
+      await trackUsage(request, session, "usage.view", { count: entries.length });
+      sendJson(response, 200, { entries });
       return;
     }
 
     await serveStatic(request, response);
   } catch (error) {
+    try {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      const session = getRequestSession(request, response);
+      if (url.pathname.startsWith("/api/")) {
+        await trackUsage(request, session, "error", {
+          status: error.status || 500,
+          message: error.message
+        });
+      }
+    } catch {
+      // Never let usage tracking hide the original app error.
+    }
     sendJson(response, error.status || 500, { error: error.message });
   }
 });

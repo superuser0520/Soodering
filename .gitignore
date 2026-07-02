@@ -8,6 +8,7 @@ android/
 
 # Local app/runtime noise.
 .DS_Store
+data/
 *.log
 npm-debug.log*
 yarn-debug.log*
