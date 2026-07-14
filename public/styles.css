@@ -374,6 +374,79 @@ h3 { font-size: 16px; line-height: 1.2; }
   min-height: 44px;
 }
 
+.order-progress {
+  background: #f9fafb;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+}
+
+.order-progress[hidden] { display: none; }
+
+.order-reminder {
+  color: var(--brand-dark);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.order-progress-list {
+  display: grid;
+  gap: 8px;
+}
+
+.order-progress-row {
+  align-items: center;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 9px 10px;
+}
+
+.order-progress-dot {
+  background: #cbd5e1;
+  border-radius: 999px;
+  height: 12px;
+  width: 12px;
+}
+
+.order-progress-row.ordering .order-progress-dot {
+  animation: pulse 0.8s ease-in-out infinite alternate;
+  background: var(--brand);
+}
+
+.order-progress-row.done {
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.order-progress-row.done .order-progress-dot {
+  background: #16a34a;
+}
+
+.order-progress-row.failed {
+  border-color: rgba(255, 59, 48, 0.35);
+}
+
+.order-progress-row.failed .order-progress-dot {
+  background: var(--danger);
+}
+
+.order-progress-status {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+@keyframes pulse {
+  from { transform: scale(0.72); opacity: 0.55; }
+  to { transform: scale(1.08); opacity: 1; }
+}
+
 .checkout-panel button {
   border-radius: 18px;
   min-height: 50px;
@@ -629,6 +702,15 @@ button.is-loading::after {
 
   .quick-order-actions {
     grid-template-columns: 1fr;
+  }
+
+  .order-progress-row {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .order-progress-status {
+    grid-column: 2;
   }
 
   .credit-grid {

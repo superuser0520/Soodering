@@ -78,6 +78,7 @@ const ordersList = document.querySelector("#ordersList");
 const ordersTabCount = document.querySelector("#ordersTabCount");
 const cartStatus = document.querySelector("#cartStatus");
 const cartList = document.querySelector("#cartList");
+const orderProgress = document.querySelector("#orderProgress");
 const clearSelectionButton = document.querySelector("#clearSelectionButton");
 const placeOrderButton = document.querySelector("#placeOrderButton");
 const quickChineseButton = document.querySelector("#quickChineseButton");
@@ -496,23 +497,91 @@ function renderBasket() {
   });
 }
 
+function renderOrderProgress(items, { active = false } = {}) {
+  if (!items.length) {
+    orderProgress.hidden = true;
+    orderProgress.innerHTML = "";
+    return;
+  }
+
+  orderProgress.hidden = false;
+  orderProgress.innerHTML = `
+    <p class="order-reminder">${active ? "Please do not close this page. SooDering is ordering day by day." : "Ordering progress"}</p>
+    <div class="order-progress-list">
+      ${items.map((item) => `
+        <div class="order-progress-row ${escapeHtml(item.status)}">
+          <span class="order-progress-dot" aria-hidden="true"></span>
+          <div>
+            <strong>${escapeHtml(formatDate(item.date))}</strong>
+            <p class="meta">${escapeHtml(item.stall)} - ${escapeHtml(item.item)} ${escapeHtml(item.price || "")}</p>
+            ${item.message ? `<p class="meta">${escapeHtml(item.message)}</p>` : ""}
+          </div>
+          <span class="order-progress-status">${escapeHtml(item.label)}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function progressItemsFor(products) {
+  return products.map((item) => ({
+    ...item,
+    status: "pending",
+    label: "Waiting",
+    message: ""
+  }));
+}
+
 async function submitProducts(products, successMessage) {
-  const result = await apiWithRelogin("/api/order/bulk", {
-    method: "POST",
-    body: JSON.stringify({
-      selections: products.map((item) => ({
-        productId: item.id,
-        date: item.date,
-        quantity: 1
-      })),
-      timeSlot: DEFAULT_TIME_SLOTS[0],
-      notes: ""
-    })
-  });
-  state.selections.clear();
-  cartStatus.textContent = successMessage;
+  const progressItems = progressItemsFor(products);
+  let latestOrders = null;
+  let successCount = 0;
+  let failureCount = 0;
+
+  renderOrderProgress(progressItems, { active: true });
+
+  for (const [index, item] of products.entries()) {
+    progressItems[index].status = "ordering";
+    progressItems[index].label = "Ordering";
+    progressItems[index].message = "Submitting now...";
+    cartStatus.textContent = `Ordering ${index + 1} of ${products.length}: ${formatDate(item.date)}. Do not close this page.`;
+    renderOrderProgress(progressItems, { active: true });
+
+    try {
+      const result = await apiWithRelogin("/api/order/bulk", {
+        method: "POST",
+        body: JSON.stringify({
+          selections: [{
+            productId: item.id,
+            date: item.date,
+            quantity: 1
+          }],
+          timeSlot: DEFAULT_TIME_SLOTS[0],
+          notes: ""
+        })
+      });
+      latestOrders = result.orders;
+      successCount += 1;
+      progressItems[index].status = "done";
+      progressItems[index].label = "Ordered";
+      progressItems[index].message = "Done";
+      state.selections.delete(item.date);
+    } catch (error) {
+      failureCount += 1;
+      progressItems[index].status = "failed";
+      progressItems[index].label = "Failed";
+      progressItems[index].message = error.message || "Order failed.";
+    }
+
+    renderOrderProgress(progressItems, { active: index < products.length - 1 });
+  }
+
+  cartStatus.textContent = failureCount
+    ? `${successCount} ordered, ${failureCount} failed. Check the progress list.`
+    : successMessage;
   renderBasket();
-  renderOrders({ orders: result.orders });
+  renderOrderProgress(progressItems);
+  if (latestOrders) renderOrders({ orders: latestOrders });
   await refreshAccountData({ includeOrders: true, forceOrders: true });
 }
 
