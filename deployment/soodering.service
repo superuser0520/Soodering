@@ -1,0 +1,19 @@
+[Unit]
+Description=SooDering lunch ordering helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Soodering
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=3000
+Environment=SOODERING_DATA_DIR=/var/lib/soodering
+ExecStart=/usr/bin/node /home/pi/Soodering/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

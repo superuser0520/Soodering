@@ -4,10 +4,13 @@ const { appendFile, mkdir, readFile } = require("node:fs/promises");
 const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || "127.0.0.1";
 const SITE_ORIGIN = "https://ssip-cafeteria.whew.life";
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
 const PUBLIC_DIR = path.join(__dirname, "public");
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = process.env.SOODERING_DATA_DIR
+  ? path.resolve(process.env.SOODERING_DATA_DIR)
+  : path.join(__dirname, "data");
 const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
 const DEFAULT_TIME_SLOTS = [
   "11:30 - 11:55",
@@ -896,6 +899,7 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Shimano lunch viewer: http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  const displayHost = HOST === "0.0.0.0" ? "localhost" : HOST;
+  console.log(`Shimano lunch viewer: http://${displayHost}:${PORT}`);
 });
