@@ -25,7 +25,8 @@ const state = {
   },
   lastActivityAt: Date.now(),
   idleTimer: null,
-  orderKeys: new Map()
+  orderKeys: new Map(),
+  rowenaNotificationKey: null
 };
 
 const menusEl = document.querySelector("#menus");
@@ -68,6 +69,9 @@ const usageList = document.querySelector("#usageList");
 const usageStatus = document.querySelector("#usageStatus");
 const workspaceTitle = document.querySelector("#workspaceTitle");
 const workspaceSubtitle = document.querySelector("#workspaceSubtitle");
+const rowenaNotification = document.querySelector("#rowenaNotification");
+const dismissRowenaNotification = document.querySelector("#dismissRowenaNotification");
+let rowenaNotificationTimer = null;
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, (char) => ({
@@ -353,6 +357,26 @@ function afterFirstPaint(callback) {
   requestAnimationFrame(() => setTimeout(callback, 0));
 }
 
+function accountContainsRowena(account) {
+  return /rowena/i.test(`${account?.username || ""} ${account?.name || ""}`);
+}
+
+function hideRowenaNotification() {
+  clearTimeout(rowenaNotificationTimer);
+  rowenaNotification.hidden = true;
+}
+
+function showRowenaNotification() {
+  if (!accountContainsRowena(state.account)) return;
+  const accountKey = String(state.account.username || state.account.name || "rowena").toLowerCase();
+  if (state.rowenaNotificationKey === accountKey) return;
+
+  state.rowenaNotificationKey = accountKey;
+  rowenaNotification.hidden = false;
+  clearTimeout(rowenaNotificationTimer);
+  rowenaNotificationTimer = setTimeout(hideRowenaNotification, 8000);
+}
+
 function renderAccount() {
   if (state.account) {
     const label = `${state.account.name || state.account.username}${state.account.staffId ? ` #${state.account.staffId}` : ""}`;
@@ -360,6 +384,7 @@ function renderAccount() {
     loginButton.textContent = "Switch account";
     loginScreen.hidden = true;
     appScreen.hidden = false;
+    showRowenaNotification();
   } else {
     accountStatus.textContent = "Sign in to order lunch.";
     signedInLabel.textContent = "";
@@ -712,7 +737,7 @@ function renderMenus() {
     <section class="day ${alreadyOrdered ? "already-ordered" : ""}">
       <div class="day-header">
         <h2>${formatDate(day.date)}</h2>
-        <p class="meta">${alreadyOrdered ? "Already ordered, still can order again" : `${day.products.length} option${day.products.length === 1 ? "" : "s"}`}</p>
+        <p class="meta">${alreadyOrdered ? "Ordered" : `${day.products.length} option${day.products.length === 1 ? "" : "s"}`}</p>
       </div>
       <ul class="menu-list">
         ${day.products.map(renderProduct).join("")}
@@ -819,6 +844,8 @@ async function loadSession() {
 
 function resetSignedOutState(message = "Sign in to order lunch.") {
   state.account = null;
+  state.rowenaNotificationKey = null;
+  hideRowenaNotification();
   state.selections.clear();
   state.orderKeys.clear();
   state.upcomingOrders = [];
@@ -941,6 +968,7 @@ logoutButton.addEventListener("click", async () => {
 });
 
 usageRefreshButton.addEventListener("click", () => loadUsage({ force: true }));
+dismissRowenaNotification.addEventListener("click", hideRowenaNotification);
 
 ordersList.addEventListener("click", async (event) => {
   const button = event.target.closest(".cancel-order-button");
