@@ -10,7 +10,7 @@ test("uses bounded numeric configuration", () => {
   delete process.env.TEST_NUMBER;
 });
 
-test("public configuration excludes administrator and logging secrets", () => {
+test("public configuration excludes administrator settings", () => {
   const exposed = publicConfig();
   assert.equal("usageAdminEmail" in exposed, false);
   assert.equal("usageHashSecret" in exposed, false);

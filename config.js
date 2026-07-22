@@ -35,7 +35,6 @@ const config = {
   usageAdminEmail: (process.env.USAGE_ADMIN_EMAIL || "soolihjing@shimano.com.sg").toLowerCase(),
   usageLogMaxBytes: numberFromEnv("USAGE_LOG_MAX_BYTES", 2 * 1024 * 1024, { min: 1024 }),
   usageLogRetentionDays: numberFromEnv("USAGE_LOG_RETENTION_DAYS", 30, { min: 1, max: 365 }),
-  usageHashSecret: process.env.USAGE_HASH_SECRET || "soodering-local-usage",
   monthlyCredit: numberFromEnv("MONTHLY_CREDIT", 100),
   defaultTimeSlots: listFromEnv("DEFAULT_TIME_SLOTS", [
     "11:30 - 11:55",

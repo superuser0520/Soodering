@@ -10,8 +10,19 @@ const {
   parseOrders,
   parseProducts,
   runIdempotentOperation,
-  splitStall
+  splitStall,
+  usageUser
 } = require("../server");
+
+test("usage logs prefer the cafeteria display name", () => {
+  assert.equal(usageUser({
+    account: { name: "Soo Lih Jing", username: "soolihjing@shimano.com.sg" },
+    credentials: { username: "fallback@shimano.com.sg" }
+  }), "Soo Lih Jing");
+  assert.equal(usageUser({
+    account: { username: "fallback@shimano.com.sg" }
+  }), "fallback@shimano.com.sg");
+});
 
 test("decodes cafeteria HTML and preserves correct Unicode", () => {
   assert.equal(decodeHtml("Fish &amp; Chips &ndash; Set"), "Fish & Chips - Set");

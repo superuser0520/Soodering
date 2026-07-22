@@ -55,10 +55,7 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 | `USAGE_ADMIN_EMAIL` | Owner account |
 | `USAGE_LOG_MAX_BYTES` | `2097152` (2 MB) |
 | `USAGE_LOG_RETENTION_DAYS` | `30` |
-| `USAGE_HASH_SECRET` | Deployment-specific usage pseudonymization secret |
 | `MENU_CACHE_MS` | `300000` (5 minutes) |
-
-For a shared deployment, always set a private `USAGE_HASH_SECRET`.
 
 ## Notes
 
@@ -72,4 +69,4 @@ For a shared deployment, always set a private `USAGE_HASH_SECRET`.
 - Multi-date selections are submitted as separate cafeteria checkouts, one per date.
 - The browser asks for confirmation before a real cafeteria order is submitted.
 - Repeated requests with the same operation ID return the original result instead of placing a duplicate order.
-- Usage records are pseudonymized, rotated by size, and deleted after the configured retention period.
+- Usage records show the cafeteria display name, rotate by size, and are deleted after the configured retention period.

@@ -209,9 +209,9 @@ function shortSessionId(request) {
 }
 
 function usageUser(session) {
-  const username = (session.account?.username || session.credentials?.username || "").toLowerCase();
-  if (!username) return "";
-  return crypto.createHmac("sha256", config.usageHashSecret).update(username).digest("hex").slice(0, 12);
+  const displayName = String(session.account?.name || "").trim();
+  if (displayName) return displayName;
+  return String(session.account?.username || session.credentials?.username || "").trim();
 }
 
 async function rotateUsageLogIfNeeded(nextBytes) {
@@ -1110,5 +1110,6 @@ module.exports = {
   runIdempotentOperation,
   server,
   splitStall,
+  usageUser,
   startServer
 };
