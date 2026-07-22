@@ -1,29 +1,28 @@
 const http = require("node:http");
 const crypto = require("node:crypto");
-const { appendFile, mkdir, readFile } = require("node:fs/promises");
+const { appendFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } = require("node:fs/promises");
 const path = require("node:path");
+const { config, publicConfig } = require("./config");
 
-const PORT = Number(process.env.PORT || 3000);
-const SITE_ORIGIN = "https://ssip-cafeteria.whew.life";
+const PORT = config.port;
+const SITE_ORIGIN = config.siteOrigin;
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
-const DEFAULT_TIME_SLOTS = [
-  "11:30 - 11:55",
-  "12:00 - 12:25",
-  "12:30 - 12:55",
-  "13:00 - 13:25",
-  "13:30 - 13:55"
-];
+const MENU_CACHE_FILE = path.join(DATA_DIR, "menu-cache.json");
+const DEFAULT_TIME_SLOTS = config.defaultTimeSlots;
 
 let cachedMenus = null;
 let cachedAt = 0;
-const CACHE_MS = 5 * 60 * 1000;
+const CACHE_MS = config.menuCacheMs;
 const SESSION_COOKIE = "soodering_sid";
-const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
-const USAGE_ADMIN_EMAIL = "soolihjing@shimano.com.sg";
+const SESSION_MAX_AGE_MS = config.sessionCookieMaxAgeMs;
+const SESSION_IDLE_TIMEOUT_MS = config.sessionIdleTimeoutMs;
+const USAGE_ADMIN_EMAIL = config.usageAdminEmail;
 const sessions = new Map();
+let menuLoadPromise = null;
+let usageWriteChain = Promise.resolve();
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -126,7 +125,8 @@ function createSiteSession() {
   }
 
   async function request(pathname, options = {}) {
-    const url = pathname.startsWith("http") ? pathname : `${SITE_ORIGIN}${pathname}`;
+    const url = new URL(pathname, SITE_ORIGIN);
+    if (url.origin !== SITE_ORIGIN) throw new Error("Cafeteria requests must remain on the configured origin.");
     const headers = {
       "user-agent": "Mozilla/5.0 Shimano Lunch Viewer",
       accept: "text/html,application/xhtml+xml,application/json",
@@ -147,7 +147,8 @@ function createSiteSession() {
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
       if (location) {
-        const next = new URL(location, url).href;
+        const next = new URL(location, url);
+        if (next.origin !== SITE_ORIGIN) throw new Error("Cafeteria redirected to an unexpected origin.");
         return request(next, { method: "GET", headers: { accept: headers.accept } });
       }
     }
@@ -159,6 +160,7 @@ function createSiteSession() {
     account: null,
     credentials: null,
     touchedAt: Date.now(),
+    orderOperations: new Map(),
     cookies,
     request,
     reset({ clearCredentials = true } = {}) {
@@ -166,6 +168,7 @@ function createSiteSession() {
       this.account = null;
       if (clearCredentials) this.credentials = null;
       this.touchedAt = Date.now();
+      this.orderOperations.clear();
     }
   };
 }
@@ -181,7 +184,7 @@ function parseCookies(header = "") {
   }).filter(([key]) => key));
 }
 
-function getRequestSession(request, response) {
+function getRequestSession(request, response, { touch = true } = {}) {
   cleanupSessions();
   const cookies = parseCookies(request.headers.cookie || "");
   let id = cookies[SESSION_COOKIE];
@@ -195,7 +198,7 @@ function getRequestSession(request, response) {
     response.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_MAX_AGE_MS / 1000)}${secure}`);
   }
 
-  session.touchedAt = Date.now();
+  if (touch) session.touchedAt = Date.now();
   return session;
 }
 
@@ -206,7 +209,30 @@ function shortSessionId(request) {
 }
 
 function usageUser(session) {
-  return session.account?.username || session.credentials?.username || "";
+  const username = (session.account?.username || session.credentials?.username || "").toLowerCase();
+  if (!username) return "";
+  return crypto.createHmac("sha256", config.usageHashSecret).update(username).digest("hex").slice(0, 12);
+}
+
+async function rotateUsageLogIfNeeded(nextBytes) {
+  await mkdir(DATA_DIR, { recursive: true });
+  try {
+    const current = await stat(USAGE_LOG);
+    if (current.size + nextBytes > config.usageLogMaxBytes) {
+      const suffix = new Date().toISOString().replace(/[:.]/g, "-");
+      await rename(USAGE_LOG, path.join(DATA_DIR, `usage-${suffix}.jsonl`));
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  const cutoff = Date.now() - config.usageLogRetentionDays * 24 * 60 * 60 * 1000;
+  const files = await readdir(DATA_DIR, { withFileTypes: true });
+  await Promise.all(files.filter((entry) => /^usage-.*\.jsonl$/.test(entry.name)).map(async (entry) => {
+    const filePath = path.join(DATA_DIR, entry.name);
+    const details = await stat(filePath);
+    if (details.mtimeMs < cutoff) await unlink(filePath);
+  }));
 }
 
 async function trackUsage(request, session, action, details = {}) {
@@ -220,17 +246,37 @@ async function trackUsage(request, session, action, details = {}) {
     ...details
   };
   try {
-    await mkdir(DATA_DIR, { recursive: true });
-    await appendFile(USAGE_LOG, `${JSON.stringify(entry)}\n`);
+    const line = `${JSON.stringify(entry)}\n`;
+    usageWriteChain = usageWriteChain.then(async () => {
+      await rotateUsageLogIfNeeded(Buffer.byteLength(line));
+      await appendFile(USAGE_LOG, line);
+    });
+    await usageWriteChain;
   } catch (error) {
+    usageWriteChain = Promise.resolve();
     console.warn(`Usage log failed: ${error.message}`);
   }
 }
 
 async function readUsageLog(limit = 100) {
   try {
-    const body = await readFile(USAGE_LOG, "utf8");
-    return body.trim().split("\n").filter(Boolean).slice(-limit).reverse().map((line) => JSON.parse(line));
+    const files = (await readdir(DATA_DIR, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && (entry.name === "usage.jsonl" || /^usage-.*\.jsonl$/.test(entry.name)))
+      .map((entry) => entry.name)
+      .sort().reverse();
+    const entries = [];
+    for (const file of files) {
+      const body = await readFile(path.join(DATA_DIR, file), "utf8");
+      for (const line of body.trim().split("\n").filter(Boolean).reverse()) {
+        try {
+          entries.push(JSON.parse(line));
+        } catch {
+          // Ignore one malformed record instead of hiding the entire usage log.
+        }
+        if (entries.length >= limit) return entries;
+      }
+    }
+    return entries;
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -246,11 +292,22 @@ function assertUsageAdmin(session) {
   }
 }
 
+function serializeAccount(session) {
+  if (!session.account) return null;
+  return {
+    ...session.account,
+    canViewUsage: session.account.username.toLowerCase() === USAGE_ADMIN_EMAIL
+  };
+}
+
 function cleanupSessions() {
-  const expiredBefore = Date.now() - SESSION_MAX_AGE_MS;
   for (const [id, session] of sessions.entries()) {
-    if ((session.touchedAt || 0) < expiredBefore) sessions.delete(id);
+    if (isSessionExpired(session)) sessions.delete(id);
   }
+}
+
+function isSessionExpired(session, now = Date.now()) {
+  return (session.touchedAt || 0) < now - SESSION_IDLE_TIMEOUT_MS;
 }
 
 function assertLoggedIn(session) {
@@ -551,38 +608,78 @@ async function placeBulkOrder(session, { selections = [], timeSlot = "", notes =
     throw new Error("Please select at least one meal.");
   }
 
-  const results = [];
-  for (const selection of selections) {
-    await clearCart(session);
-    await addToCart(session, {
-      productId: selection.productId,
-      date: selection.date,
-      quantity: selection.quantity || 1
-    });
-    const placed = await placeOrder(session, { timeSlot, notes });
-    results.push({
-      date: selection.date,
-      productId: selection.productId,
-      result: placed.result,
-      redirect: placed.redirect
-    });
-  }
-  await clearCart(session);
+  if (selections.length > 20) throw new Error("A maximum of 20 meals can be ordered at once.");
 
-  return {
-    result: "success",
-    placed: results,
-    orders: await loadOrders(session)
-  };
+  const results = [];
+  try {
+    for (const selection of selections) {
+      if (!selection.productId || !/^\d{4}-\d{2}-\d{2}$/.test(selection.date || "")) {
+        throw new Error("Every selection requires a valid product and delivery date.");
+      }
+      await clearCart(session);
+      await addToCart(session, {
+        productId: selection.productId,
+        date: selection.date,
+        quantity: selection.quantity || 1
+      });
+      const placed = await placeOrder(session, { timeSlot, notes });
+      results.push({
+        date: selection.date,
+        productId: selection.productId,
+        result: placed.result,
+        redirect: placed.redirect
+      });
+    }
+
+    return {
+      result: "success",
+      placed: results,
+      orders: await loadOrders(session)
+    };
+  } finally {
+    try {
+      await clearCart(session);
+    } catch {
+      // Preserve the original checkout result; the next order also clears the cart first.
+    }
+  }
+}
+
+async function runIdempotentOperation(operations, key, operation) {
+  if (operations.has(key)) return operations.get(key);
+  const pending = Promise.resolve().then(operation);
+  operations.set(key, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    operations.delete(key);
+    throw error;
+  }
+}
+
+async function placeIdempotentBulkOrder(session, body) {
+  const key = String(body.idempotencyKey || "");
+  if (!/^[a-zA-Z0-9_-]{16,100}$/.test(key)) {
+    const error = new Error("A valid order operation ID is required.");
+    error.status = 400;
+    throw error;
+  }
+  return runIdempotentOperation(session.orderOperations, key, () => placeBulkOrder(session, body));
 }
 
 async function cancelOrder(session, cancelUrl) {
   await ensureLoggedIn(session);
-  if (!cancelUrl || !cancelUrl.startsWith(SITE_ORIGIN)) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(cancelUrl);
+  } catch {
+    parsedUrl = null;
+  }
+  if (!parsedUrl || parsedUrl.origin !== SITE_ORIGIN || !parsedUrl.searchParams.has("cancel_order")) {
     throw new Error("A valid cafeteria cancel link is required.");
   }
 
-  const response = await session.request(cancelUrl);
+  const response = await session.request(parsedUrl);
   await response.text();
   return {
     orders: await loadOrders(session),
@@ -592,17 +689,11 @@ async function cancelOrder(session, cancelUrl) {
 
 async function loadOrders(session) {
   await ensureLoggedIn(session);
-  const paths = ["/orders/", ...Array.from({ length: 5 }, (_, index) => `/orders/${index + 2}`)];
-  const pages = [];
-  for (const pathname of paths) {
-    try {
-      const html = await readProtectedPage(session, pathname);
-      const parsed = parseOrders(html);
-      if (parsed.length > 0) pages.push(parsed);
-    } catch {
-      // Some cafeteria installs do not expose every pagination style.
-    }
-  }
+  const firstPage = parseOrders(await readProtectedPage(session, "/orders/"));
+  const extraPages = await Promise.allSettled(
+    Array.from({ length: 5 }, (_, index) => readProtectedPage(session, `/orders/${index + 2}`).then(parseOrders))
+  );
+  const pages = [firstPage, ...extraPages.filter((result) => result.status === "fulfilled").map((result) => result.value)];
 
   const seen = new Set();
   return pages.flat().filter((order) => {
@@ -677,7 +768,71 @@ function parseProducts(html, date) {
 
 async function loadMenus(force = false) {
   const now = Date.now();
-  if (!force && cachedMenus && now - cachedAt < CACHE_MS) return cachedMenus;
+  if (!force && cachedMenus) {
+    if (now - cachedAt < CACHE_MS) return cachedMenus;
+    refreshMenusInBackground();
+    return { ...cachedMenus, refreshing: true };
+  }
+  if (menuLoadPromise) return menuLoadPromise;
+
+  if (!force && !cachedMenus) {
+    const persisted = await readPersistedMenus();
+    if (persisted) {
+      cachedMenus = persisted;
+      cachedAt = Date.parse(persisted.fetchedAt) || 0;
+      if (now - cachedAt >= CACHE_MS) refreshMenusInBackground();
+      return { ...cachedMenus, refreshing: now - cachedAt >= CACHE_MS };
+    }
+  }
+
+  menuLoadPromise = loadMenusUncached();
+  try {
+    return await menuLoadPromise;
+  } finally {
+    menuLoadPromise = null;
+  }
+}
+
+function filterHiddenMenuItems(menuData) {
+  const hidden = config.hiddenMenuItems.map((item) => item.toLowerCase().trim());
+  const days = menuData.days.map((day) => ({
+    ...day,
+    products: day.products.filter((product) => {
+      const item = product.item.toLowerCase().trim();
+      return !hidden.some((excluded) => item.includes(excluded));
+    })
+  })).filter((day) => day.products.length > 0);
+  return {
+    ...menuData,
+    days,
+    totalProducts: days.reduce((sum, day) => sum + day.products.length, 0)
+  };
+}
+
+async function readPersistedMenus() {
+  try {
+    const parsed = JSON.parse(await readFile(MENU_CACHE_FILE, "utf8"));
+    return Array.isArray(parsed.days) && parsed.days.length > 0 ? filterHiddenMenuItems(parsed) : null;
+  } catch (error) {
+    if (error.code === "ENOENT" || error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+function refreshMenusInBackground() {
+  if (menuLoadPromise) return;
+  menuLoadPromise = loadMenusUncached()
+    .catch((error) => {
+      console.warn(`Background menu refresh failed: ${error.message}`);
+      return cachedMenus;
+    })
+    .finally(() => {
+      menuLoadPromise = null;
+    });
+}
+
+async function loadMenusUncached() {
+  const now = Date.now();
 
   const firstPage = await fetchHtml(LUNCH_URL);
   const dates = parseDates(firstPage);
@@ -701,24 +856,38 @@ async function loadMenus(force = false) {
     throw new Error("No lunch menu pages could be loaded.");
   }
 
-  cachedMenus = {
+  cachedMenus = filterHiddenMenuItems({
     source: LUNCH_URL,
     fetchedAt: new Date().toISOString(),
     days,
     totalProducts: days.reduce((sum, day) => sum + day.products.length, 0)
-  };
+  });
   cachedAt = now;
+  await mkdir(DATA_DIR, { recursive: true });
+  await writeFile(MENU_CACHE_FILE, JSON.stringify(cachedMenus), "utf8");
   return cachedMenus;
 }
 
 function sendJson(response, status, payload) {
-  response.writeHead(status, { "content-type": contentTypes[".json"] });
+  response.writeHead(status, {
+    "content-type": contentTypes[".json"],
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer"
+  });
   response.end(JSON.stringify(payload));
 }
 
 async function readJsonBody(request) {
   let body = "";
-  for await (const chunk of request) body += chunk;
+  for await (const chunk of request) {
+    body += chunk;
+    if (Buffer.byteLength(body) > 64 * 1024) {
+      const error = new Error("Request body is too large.");
+      error.status = 413;
+      throw error;
+    }
+  }
   return body ? JSON.parse(body) : {};
 }
 
@@ -737,7 +906,10 @@ async function serveStatic(request, response) {
     const body = await readFile(filePath);
     response.writeHead(200, {
       "content-type": contentTypes[path.extname(filePath)] || "application/octet-stream",
-      "cache-control": "no-store"
+      "cache-control": "no-store",
+      "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://ssip-cafeteria.whew.life; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer"
     });
     response.end(body);
   } catch {
@@ -749,7 +921,12 @@ async function serveStatic(request, response) {
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host}`);
-    const session = getRequestSession(request, response);
+    const session = getRequestSession(request, response, { touch: url.pathname !== "/api/keepalive" });
+
+    if (url.pathname === "/api/config") {
+      sendJson(response, 200, publicConfig());
+      return;
+    }
 
     if (url.pathname === "/api/menus") {
       const force = url.searchParams.get("refresh") === "1";
@@ -767,7 +944,7 @@ const server = http.createServer(async (request, response) => {
       if (!username || !password) throw new Error("Username and password are required.");
       const account = await loginToSite(session, username, password);
       await trackUsage(request, session, "login.success");
-      sendJson(response, 200, { account });
+      sendJson(response, 200, { account: serializeAccount(session) });
       return;
     }
 
@@ -779,7 +956,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/session") {
-      sendJson(response, 200, { account: session.account });
+      sendJson(response, 200, { account: serializeAccount(session), idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS });
       return;
     }
 
@@ -788,7 +965,7 @@ const server = http.createServer(async (request, response) => {
       const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
       await trackUsage(request, session, "session.keepalive");
       sendJson(response, 200, {
-        account: session.account,
+        account: serializeAccount(session),
         balance: wallet.balance,
         keptAliveAt: new Date().toISOString()
       });
@@ -858,7 +1035,7 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/order/bulk" && request.method === "POST") {
       const body = await readJsonBody(request);
-      const result = await placeBulkOrder(session, body);
+      const result = await placeIdempotentBulkOrder(session, body);
       await trackUsage(request, session, "order.bulk", {
         result: result.result,
         requested: Array.isArray(body.selections) ? body.selections.length : 0,
@@ -882,7 +1059,7 @@ const server = http.createServer(async (request, response) => {
   } catch (error) {
     try {
       const url = new URL(request.url, `http://${request.headers.host}`);
-      const session = getRequestSession(request, response);
+      const session = getRequestSession(request, response, { touch: false });
       if (url.pathname.startsWith("/api/")) {
         await trackUsage(request, session, "error", {
           status: error.status || 500,
@@ -896,6 +1073,42 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Shimano lunch viewer: http://localhost:${PORT}`);
-});
+function startServer() {
+  if (server.listening) return Promise.resolve(server);
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      console.log(`SooDering: http://${config.host}:${PORT}`);
+      resolve(server);
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(PORT, config.host);
+  });
+}
+
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  decodeHtml,
+  createSiteSession,
+  isSessionExpired,
+  parseDates,
+  parseOrderDeliveryDate,
+  parseOrders,
+  parseProducts,
+  filterHiddenMenuItems,
+  runIdempotentOperation,
+  server,
+  splitStall,
+  startServer
+};

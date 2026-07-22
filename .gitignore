@@ -17,6 +17,7 @@ yarn-error.log*
 # Secrets and local environment.
 .env
 .env.*
+!.env.example
 
 # Desktop installers and packages.
 *.apk

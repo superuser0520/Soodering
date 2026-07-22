@@ -1,44 +1,7 @@
-const DEFAULT_TIME_SLOTS = [
-  "11:30 - 11:55",
-  "12:00 - 12:25",
-  "12:30 - 12:55",
-  "13:00 - 13:25",
-  "13:30 - 13:55"
-];
 const CREDENTIALS_KEY = "soodering.credentials";
 const LEGACY_CREDENTIALS_KEY = "shimanoLunch.credentials";
-const MONTHLY_CREDIT = 100;
+const REMEMBERED_USERNAME_KEY = "soodering.rememberedUsername";
 const KEEPALIVE_MS = 4 * 60 * 1000;
-const QUICK_ORDER_EXCLUDED_ITEMS = /economic\s*rice|nasi\s*padang|vegetarian\s*set/i;
-const USAGE_ADMIN_EMAIL = "soolihjing@shimano.com.sg";
-const SG_PUBLIC_HOLIDAYS = new Set([
-  "2026-01-01",
-  "2026-02-17",
-  "2026-02-18",
-  "2026-03-21",
-  "2026-04-03",
-  "2026-05-01",
-  "2026-05-27",
-  "2026-05-31",
-  "2026-06-01",
-  "2026-08-09",
-  "2026-08-10",
-  "2026-11-08",
-  "2026-11-09",
-  "2026-12-25",
-  "2027-01-01",
-  "2027-02-06",
-  "2027-02-07",
-  "2027-02-08",
-  "2027-03-10",
-  "2027-03-26",
-  "2027-05-01",
-  "2027-05-17",
-  "2027-05-20",
-  "2027-08-09",
-  "2027-10-28",
-  "2027-12-25"
-]);
 
 const state = {
   account: null,
@@ -51,7 +14,18 @@ const state = {
   ordersLoading: false,
   usageLoaded: false,
   usageLoading: false,
-  walletLoading: false
+  walletLoading: false,
+  config: {
+    monthlyCredit: 100,
+    defaultTimeSlots: ["11:30 - 11:55"],
+    quickOrderExcludedItems: "economic rice|nasi padang|vegetarian set",
+    hiddenMenuItems: ["vegetarian set", "economic rice set", "nasi padang set"],
+    publicHolidays: [],
+    sessionIdleTimeoutMs: 30 * 60 * 1000
+  },
+  lastActivityAt: Date.now(),
+  idleTimer: null,
+  orderKeys: new Map()
 };
 
 const menusEl = document.querySelector("#menus");
@@ -92,6 +66,8 @@ const usageTabButton = document.querySelector("#usageTabButton");
 const usageRefreshButton = document.querySelector("#usageRefreshButton");
 const usageList = document.querySelector("#usageList");
 const usageStatus = document.querySelector("#usageStatus");
+const workspaceTitle = document.querySelector("#workspaceTitle");
+const workspaceSubtitle = document.querySelector("#workspaceSubtitle");
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, (char) => ({
@@ -103,33 +79,57 @@ function escapeHtml(value = "") {
   }[char]));
 }
 
-function rememberCredentials(username, password) {
-  localStorage.setItem(CREDENTIALS_KEY, JSON.stringify({ username, password }));
-  localStorage.removeItem(LEGACY_CREDENTIALS_KEY);
-}
-
-function forgetCredentials() {
+function clearLegacyBrowserCredentials() {
   localStorage.removeItem(CREDENTIALS_KEY);
   localStorage.removeItem(LEGACY_CREDENTIALS_KEY);
 }
 
-function fillRememberedCredentials() {
+async function rememberCredentials(username, password) {
+  clearLegacyBrowserCredentials();
+  if (!window.sooderingCredentials?.available) {
+    localStorage.setItem(REMEMBERED_USERNAME_KEY, username);
+    return true;
+  }
+  localStorage.removeItem(REMEMBERED_USERNAME_KEY);
+  await window.sooderingCredentials.save({ username, password });
+  return true;
+}
+
+async function forgetCredentials() {
+  clearLegacyBrowserCredentials();
+  localStorage.removeItem(REMEMBERED_USERNAME_KEY);
+  if (window.sooderingCredentials?.available) await window.sooderingCredentials.clear();
+}
+
+async function fillRememberedCredentials() {
+  clearLegacyBrowserCredentials();
+  rememberInput.disabled = false;
+  rememberInput.title = window.sooderingCredentials?.available
+    ? "Store the login using operating-system encryption."
+    : "Remember the email; your browser password manager can remember the password.";
+  if (!window.sooderingCredentials?.available) {
+    const username = localStorage.getItem(REMEMBERED_USERNAME_KEY) || "";
+    if (username) usernameInput.value = username;
+    rememberInput.checked = Boolean(username);
+    return;
+  }
   try {
-    const saved = JSON.parse(localStorage.getItem(CREDENTIALS_KEY) || localStorage.getItem(LEGACY_CREDENTIALS_KEY) || "{}");
+    const saved = await window.sooderingCredentials.load() || {};
     if (saved.username) usernameInput.value = saved.username;
     if (saved.password) passwordInput.value = saved.password;
     rememberInput.checked = Boolean(saved.username || saved.password);
   } catch {
-    forgetCredentials();
+    await forgetCredentials();
   }
 }
 
-function getRememberedCredentials() {
+async function getRememberedCredentials() {
+  if (!window.sooderingCredentials?.available) return null;
   try {
-    const saved = JSON.parse(localStorage.getItem(CREDENTIALS_KEY) || localStorage.getItem(LEGACY_CREDENTIALS_KEY) || "{}");
+    const saved = await window.sooderingCredentials.load() || {};
     return saved.username && saved.password ? saved : null;
   } catch {
-    forgetCredentials();
+    await forgetCredentials();
     return null;
   }
 }
@@ -163,7 +163,7 @@ async function api(path, options = {}) {
 }
 
 async function loginWithRememberedCredentials() {
-  const saved = getRememberedCredentials();
+  const saved = await getRememberedCredentials();
   if (!saved) return false;
 
   const data = await api("/api/login", {
@@ -192,10 +192,8 @@ async function apiWithRelogin(path, options = {}, statusTarget = cartStatus) {
 }
 
 async function keepCafeteriaSessionAlive() {
-  if (!state.account) {
-    const restored = await loginWithRememberedCredentials();
-    if (!restored) return;
-  }
+  if (!state.account || document.hidden) return;
+  if (Date.now() - state.lastActivityAt >= state.config.sessionIdleTimeoutMs) return;
 
   try {
     const data = await apiWithRelogin("/api/keepalive", { headers: {} }, null);
@@ -230,7 +228,7 @@ function formatMoney(value) {
 }
 
 function canViewUsage() {
-  return (state.account?.username || "").toLowerCase() === USAGE_ADMIN_EMAIL;
+  return Boolean(state.account?.canViewUsage);
 }
 
 function formatDateTime(value) {
@@ -288,7 +286,7 @@ function daysBetween(start, end) {
 
 function isWorkingDay(date) {
   const day = date.getDay();
-  return day !== 0 && day !== 6 && !SG_PUBLIC_HOLIDAYS.has(isoDate(date));
+  return day !== 0 && day !== 6 && !state.config.publicHolidays.includes(isoDate(date));
 }
 
 function creditCycle(todayIsoValue = todayIso()) {
@@ -318,7 +316,7 @@ function creditCycle(todayIsoValue = todayIso()) {
     workingDays: days.length,
     workdaysLeft,
     calendarDaysLeft: Math.max(0, daysBetween(today, refresh)),
-    dailyCredit: days.length ? MONTHLY_CREDIT / days.length : 0
+    dailyCredit: days.length ? state.config.monthlyCredit / days.length : 0
   };
 }
 
@@ -337,6 +335,18 @@ function ordersForProduct(product) {
 
 function allProducts(days) {
   return days.flatMap((day) => day.products.map((product) => ({ ...product, label: day.label })));
+}
+
+function withoutHiddenMenuItems(menuData) {
+  const hidden = state.config.hiddenMenuItems.map((item) => item.toLowerCase().trim());
+  const days = menuData.days.map((day) => ({
+    ...day,
+    products: day.products.filter((product) => {
+      const item = product.item.toLowerCase().trim();
+      return !hidden.some((excluded) => item.includes(excluded));
+    })
+  })).filter((day) => day.products.length > 0);
+  return { ...menuData, days, totalProducts: days.reduce((sum, day) => sum + day.products.length, 0) };
 }
 
 function afterFirstPaint(callback) {
@@ -377,6 +387,13 @@ function renderActiveTab() {
   menuView.hidden = state.activeTab !== "menu";
   ordersView.hidden = state.activeTab !== "orders";
   usageView.hidden = state.activeTab !== "usage";
+  const workspaceCopy = {
+    menu: ["Menu", "Choose meals across upcoming dates."],
+    orders: ["Upcoming orders", "Review or cancel your reserved meals."],
+    usage: ["Usage log", "Review recent SooDering activity."]
+  }[state.activeTab];
+  workspaceTitle.textContent = workspaceCopy[0];
+  workspaceSubtitle.textContent = workspaceCopy[1];
 }
 
 function renderOrders(payload) {
@@ -441,13 +458,14 @@ function selectedItems() {
 
 function weekdayProductsForStall(stallName) {
   if (!state.data) return [];
+  const excludedItems = new RegExp(state.config.quickOrderExcludedItems, "i");
   return state.data.days
     .filter((day) => isWeekday(day.date))
     .filter((day) => !state.orderedDates?.has(day.date))
     .map((day) => day.products.find((product) => {
       const productName = `${product.title} ${product.item}`;
       return product.stall.toLowerCase() === stallName.toLowerCase()
-        && !QUICK_ORDER_EXCLUDED_ITEMS.test(productName);
+        && !excludedItems.test(productName);
     }))
     .filter(Boolean);
 }
@@ -480,8 +498,11 @@ function renderBasket() {
     cartStatus.textContent = `${items.length} date${items.length === 1 ? "" : "s"} selected.`;
     cartList.innerHTML = items.map((item) => `
       <div class="list-row basket-row">
-        <strong>${escapeHtml(formatDate(item.date))}</strong>
-        <span>${escapeHtml(item.stall)} - ${escapeHtml(item.item)} ${escapeHtml(item.price)}</span>
+        <img class="basket-stall-logo" src="${stallLogoPath(item.stall)}" alt="" aria-hidden="true">
+        <div class="basket-copy">
+          <strong>${escapeHtml(formatDate(item.date))}</strong>
+          <span>${escapeHtml(item.stall)} - ${escapeHtml(item.item)} ${escapeHtml(item.price)}</span>
+        </div>
         <button class="secondary remove-selection-button" type="button" data-date="${escapeHtml(item.date)}">Remove</button>
       </div>
     `).join("");
@@ -532,6 +553,14 @@ function progressItemsFor(products) {
   }));
 }
 
+function orderOperationKey(item) {
+  const selectionKey = `${item.date}|${item.id}`;
+  if (!state.orderKeys.has(selectionKey)) {
+    state.orderKeys.set(selectionKey, crypto.randomUUID().replaceAll("-", ""));
+  }
+  return state.orderKeys.get(selectionKey);
+}
+
 async function submitProducts(products, successMessage) {
   const progressItems = progressItemsFor(products);
   let latestOrders = null;
@@ -556,8 +585,9 @@ async function submitProducts(products, successMessage) {
             date: item.date,
             quantity: 1
           }],
-          timeSlot: DEFAULT_TIME_SLOTS[0],
-          notes: ""
+          timeSlot: state.config.defaultTimeSlots[0],
+          notes: "",
+          idempotencyKey: orderOperationKey(item)
         })
       });
       latestOrders = result.orders;
@@ -566,6 +596,7 @@ async function submitProducts(products, successMessage) {
       progressItems[index].label = "Ordered";
       progressItems[index].message = "Done";
       state.selections.delete(item.date);
+      state.orderKeys.delete(`${item.date}|${item.id}`);
     } catch (error) {
       failureCount += 1;
       progressItems[index].status = "failed";
@@ -603,7 +634,7 @@ async function quickOrder(stallName) {
   }
 
   const summary = products.map((item) => `${formatDate(item.date)}: ${item.item} ${item.price}`).join("\n");
-  const confirmed = window.confirm(`Quick order ${stallName} for ${products.length} weekday${products.length === 1 ? "" : "s"}?\n\n${summary}\n\nTime: 11:30 - 11:55`);
+  const confirmed = window.confirm(`Quick order ${stallName} for ${products.length} weekday${products.length === 1 ? "" : "s"}?\n\n${summary}\n\nTime: ${state.config.defaultTimeSlots[0]}`);
   if (!confirmed) return;
 
   setOrderingProgress(true, `Ordering ${stallName} weekdays...`);
@@ -623,7 +654,7 @@ function renderProduct(product) {
 
   return `
     <li class="menu-item ${orders.length ? "ordered-item" : ""}">
-      <a class="thumb" href="${escapeHtml(product.productUrl)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(product.title)}"><span class="food-logo">🍱</span></a>
+      <a class="thumb" href="${escapeHtml(product.productUrl)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(product.title)}"><img class="stall-logo" src="${stallLogoPath(product.stall)}" alt="" aria-hidden="true"></a>
       <div class="menu-copy">
         <p class="stall">${escapeHtml(product.stall)}</p>
         <h3>${escapeHtml(product.item)}</h3>
@@ -634,6 +665,13 @@ function renderProduct(product) {
       <button class="secondary pick-button" type="button" data-product-id="${escapeHtml(product.id)}" data-date="${escapeHtml(product.date)}" aria-label="Pick meal">+</button>
     </li>
   `;
+}
+
+function stallLogoPath(stall = "") {
+  const normalized = stall.toLowerCase();
+  if (normalized.includes("chinese")) return "/stall-logos/chinese-stall.png";
+  if (normalized.includes("malay")) return "/stall-logos/malay-stall.png";
+  return "/stall-logos/international-stall.png";
 }
 
 function renderCredit() {
@@ -689,7 +727,7 @@ async function loadMenus(refresh = false) {
   setMenuLoading(true, refresh ? "Refreshing menus..." : "Loading cafeteria menus...");
 
   try {
-    state.data = await api(`/api/menus${refresh ? "?refresh=1" : ""}`, { headers: {} });
+    state.data = withoutHiddenMenuItems(await api(`/api/menus${refresh ? "?refresh=1" : ""}`, { headers: {} }));
     renderMenus();
   } catch (error) {
     statusEl.textContent = error.message;
@@ -758,21 +796,87 @@ async function loadUsage({ force = false } = {}) {
 
 async function refreshAccountData({ includeOrders = false, forceOrders = false } = {}) {
   if (!state.account) return;
-  await loadWallet();
-  if (includeOrders) await loadOrders({ force: forceOrders });
+  await Promise.all([
+    loadWallet(),
+    includeOrders ? loadOrders({ force: forceOrders }) : Promise.resolve()
+  ]);
 }
 
 async function loadSession() {
   const data = await api("/api/session", { headers: {} });
+  if (data.idleTimeoutMs) state.config.sessionIdleTimeoutMs = data.idleTimeoutMs;
   state.account = data.account;
   if (!state.account) {
     await loginWithRememberedCredentials();
   }
   renderAccount();
   renderBasket();
+  recordActivity();
   afterFirstPaint(() => {
-    loadWallet();
+    refreshAccountData({ includeOrders: true, forceOrders: true });
   });
+}
+
+function resetSignedOutState(message = "Sign in to order lunch.") {
+  state.account = null;
+  state.selections.clear();
+  state.orderKeys.clear();
+  state.upcomingOrders = [];
+  state.orderedDates = new Set();
+  state.walletBalance = "";
+  state.ordersLoaded = false;
+  state.ordersLoading = false;
+  state.usageLoaded = false;
+  state.usageLoading = false;
+  accountStatus.textContent = message;
+  renderAccount();
+  walletBalance.textContent = "-";
+  ordersList.innerHTML = "";
+  usageList.innerHTML = "";
+  usageStatus.textContent = "Recent SooDering activity.";
+  renderCredit();
+  renderBasket();
+}
+
+async function logout({ message, notifyServer = true } = {}) {
+  clearTimeout(state.idleTimer);
+  if (notifyServer) {
+    try {
+      await api("/api/logout", { method: "POST", body: "{}" });
+    } catch {
+      // Local state must still be cleared when the server session has expired.
+    }
+  }
+  resetSignedOutState(message);
+  await fillRememberedCredentials();
+}
+
+function scheduleIdleTimeout() {
+  clearTimeout(state.idleTimer);
+  if (!state.account) return;
+  const remaining = Math.max(0, state.config.sessionIdleTimeoutMs - (Date.now() - state.lastActivityAt));
+  state.idleTimer = setTimeout(() => {
+    logout({ message: "Signed out after being inactive for too long." });
+  }, remaining);
+}
+
+function recordActivity() {
+  if (!state.account) return;
+  state.lastActivityAt = Date.now();
+  scheduleIdleTimeout();
+}
+
+async function bootstrap() {
+  clearLegacyBrowserCredentials();
+  try {
+    state.config = { ...state.config, ...await api("/api/config", { headers: {} }) };
+  } catch {
+    // Safe defaults keep the login screen usable if configuration cannot load.
+  }
+  await fillRememberedCredentials();
+  renderActiveTab();
+  loadMenus();
+  await loadSession();
 }
 
 refreshButton.addEventListener("click", () => loadMenus(true));
@@ -815,11 +919,12 @@ loginForm.addEventListener("submit", async (event) => {
       })
     });
     if (rememberInput.checked) {
-      rememberCredentials(username, password);
+      await rememberCredentials(username, password);
     } else {
-      forgetCredentials();
+      await forgetCredentials();
     }
     state.account = data.account;
+    recordActivity();
     renderAccount();
     afterFirstPaint(() => {
       refreshAccountData({ includeOrders: true, forceOrders: true });
@@ -832,24 +937,7 @@ loginForm.addEventListener("submit", async (event) => {
 });
 
 logoutButton.addEventListener("click", async () => {
-  await api("/api/logout", { method: "POST", body: "{}" });
-  state.account = null;
-  state.selections.clear();
-  state.upcomingOrders = [];
-  state.orderedDates = new Set();
-  state.walletBalance = "";
-  state.ordersLoaded = false;
-  state.ordersLoading = false;
-  state.usageLoaded = false;
-  state.usageLoading = false;
-  renderAccount();
-  walletBalance.textContent = "-";
-  ordersList.innerHTML = "";
-  usageList.innerHTML = "";
-  usageStatus.textContent = "Recent SooDering activity.";
-  renderCredit();
-  fillRememberedCredentials();
-  renderBasket();
+  await logout();
 });
 
 usageRefreshButton.addEventListener("click", () => loadUsage({ force: true }));
@@ -911,7 +999,7 @@ placeOrderButton.addEventListener("click", async () => {
   if (selections.length === 0) return;
 
   const summary = selections.map((item) => `${formatDate(item.date)}: ${item.stall} - ${item.item}`).join("\n");
-  const confirmed = window.confirm(`Place these cafeteria reservations now?\n\n${summary}\n\nTime: 11:30 - 11:55`);
+  const confirmed = window.confirm(`Place these cafeteria reservations now?\n\n${summary}\n\nTime: ${state.config.defaultTimeSlots[0]}`);
   if (!confirmed) return;
 
   setOrderingProgress(true, "Ordering selected meals...");
@@ -924,8 +1012,11 @@ placeOrderButton.addEventListener("click", async () => {
   }
 });
 
-fillRememberedCredentials();
-renderActiveTab();
-loadMenus();
-loadSession().catch(() => {});
+for (const eventName of ["pointerdown", "keydown", "touchstart"]) {
+  document.addEventListener(eventName, recordActivity, { passive: true });
+}
+
+bootstrap().catch((error) => {
+  accountStatus.textContent = error.message || "Unable to start SooDering.";
+});
 setInterval(keepCafeteriaSessionAlive, KEEPALIVE_MS);

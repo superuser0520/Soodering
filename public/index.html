@@ -27,7 +27,7 @@
           </label>
           <label class="remember-row" for="rememberInput">
             <input id="rememberInput" name="remember" type="checkbox">
-            <span>Remember my login on this device</span>
+            <span>Remember my login</span>
           </label>
           <button id="loginButton" type="submit">
             <span class="icon" aria-hidden="true">↗</span>
@@ -37,6 +37,7 @@
       </section>
 
       <section id="appScreen" class="app-screen" hidden>
+        <aside class="desktop-sidebar">
         <header class="topbar">
           <div>
             <p class="eyebrow">Cafeteria Helper</p>
@@ -84,6 +85,16 @@
             </div>
           </div>
         </section>
+        </aside>
+
+        <section class="workspace">
+          <header class="workspace-header">
+            <div>
+              <p class="eyebrow">Lunch workspace</p>
+              <h2 id="workspaceTitle">Menu</h2>
+              <p id="workspaceSubtitle" class="meta">Choose meals across upcoming dates.</p>
+            </div>
+          </header>
 
         <section id="ordersView" class="tab-panel" hidden>
           <section class="panel orders-panel">
@@ -141,9 +152,10 @@
         </section>
         <section id="menus" class="menus" aria-live="polite"></section>
         </section>
+        </section>
       </section>
     </main>
 
-    <script src="/app.js?v=16"></script>
+    <script src="/app.js?v=17"></script>
   </body>
 </html>
