@@ -29,6 +29,7 @@
             <input id="rememberInput" name="remember" type="checkbox">
             <span>Remember my login</span>
           </label>
+          <p id="rememberHelp" class="meta remember-help"></p>
           <button id="loginButton" type="submit">
             <span class="icon" aria-hidden="true">↗</span>
             <span>Login</span>
@@ -164,6 +165,14 @@
       <button id="dismissRowenaNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
     </aside>
 
-    <script src="/app.js?v=19"></script>
+    <aside id="systemNotification" class="system-notification" role="alert" aria-live="assertive" data-tone="error" hidden>
+      <div>
+        <strong id="systemNotificationTitle">Login unsuccessful</strong>
+        <p id="systemNotificationMessage"></p>
+      </div>
+      <button id="dismissSystemNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
+    </aside>
+
+    <script src="/app.js?v=20"></script>
   </body>
 </html>

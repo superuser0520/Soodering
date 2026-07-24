@@ -38,6 +38,7 @@ const loginForm = document.querySelector("#loginForm");
 const usernameInput = document.querySelector("#usernameInput");
 const passwordInput = document.querySelector("#passwordInput");
 const rememberInput = document.querySelector("#rememberInput");
+const rememberHelp = document.querySelector("#rememberHelp");
 const accountStatus = document.querySelector("#accountStatus");
 const signedInLabel = document.querySelector("#signedInLabel");
 const loginButton = document.querySelector("#loginButton");
@@ -71,7 +72,12 @@ const workspaceTitle = document.querySelector("#workspaceTitle");
 const workspaceSubtitle = document.querySelector("#workspaceSubtitle");
 const rowenaNotification = document.querySelector("#rowenaNotification");
 const dismissRowenaNotification = document.querySelector("#dismissRowenaNotification");
+const systemNotification = document.querySelector("#systemNotification");
+const systemNotificationTitle = document.querySelector("#systemNotificationTitle");
+const systemNotificationMessage = document.querySelector("#systemNotificationMessage");
+const dismissSystemNotification = document.querySelector("#dismissSystemNotification");
 let rowenaNotificationTimer = null;
+let systemNotificationTimer = null;
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, (char) => ({
@@ -88,11 +94,38 @@ function clearLegacyBrowserCredentials() {
   localStorage.removeItem(LEGACY_CREDENTIALS_KEY);
 }
 
+function browserPasswordManagerAvailable() {
+  return window.isSecureContext
+    && typeof window.PasswordCredential === "function"
+    && typeof navigator.credentials?.store === "function"
+    && typeof navigator.credentials?.get === "function";
+}
+
+async function storeBrowserCredentials(username, password) {
+  if (!browserPasswordManagerAvailable()) return false;
+  await navigator.credentials.store(new PasswordCredential({
+    id: username,
+    name: username,
+    password
+  }));
+  return true;
+}
+
+async function loadBrowserCredentials() {
+  if (!browserPasswordManagerAvailable()) return null;
+  const saved = await navigator.credentials.get({
+    password: true,
+    mediation: "optional"
+  });
+  if (!saved?.id || !saved?.password) return null;
+  return { username: saved.id, password: saved.password };
+}
+
 async function rememberCredentials(username, password) {
   clearLegacyBrowserCredentials();
   if (!window.sooderingCredentials?.available) {
     localStorage.setItem(REMEMBERED_USERNAME_KEY, username);
-    return true;
+    return storeBrowserCredentials(username, password);
   }
   localStorage.removeItem(REMEMBERED_USERNAME_KEY);
   await window.sooderingCredentials.save({ username, password });
@@ -108,12 +141,30 @@ async function forgetCredentials() {
 async function fillRememberedCredentials() {
   clearLegacyBrowserCredentials();
   rememberInput.disabled = false;
-  rememberInput.title = window.sooderingCredentials?.available
+  const electronStorage = Boolean(window.sooderingCredentials?.available);
+  const browserStorage = browserPasswordManagerAvailable();
+  rememberInput.title = electronStorage
     ? "Store the login using operating-system encryption."
-    : "Remember the email; your browser password manager can remember the password.";
+    : browserStorage
+      ? "Store the login in your browser password manager."
+      : "Remember the email. Secure password saving requires HTTPS and browser password-manager support.";
+  rememberHelp.textContent = rememberInput.title;
   if (!window.sooderingCredentials?.available) {
     const username = localStorage.getItem(REMEMBERED_USERNAME_KEY) || "";
-    if (username) usernameInput.value = username;
+    let saved = null;
+    if (username) {
+      try {
+        saved = await loadBrowserCredentials();
+      } catch {
+        saved = null;
+      }
+    }
+    if (saved?.username && saved.username.toLowerCase() === username.toLowerCase()) {
+      usernameInput.value = saved.username;
+      passwordInput.value = saved.password;
+    } else if (username) {
+      usernameInput.value = username;
+    }
     rememberInput.checked = Boolean(username);
     return;
   }
@@ -128,7 +179,16 @@ async function fillRememberedCredentials() {
 }
 
 async function getRememberedCredentials() {
-  if (!window.sooderingCredentials?.available) return null;
+  if (!window.sooderingCredentials?.available) {
+    const rememberedUsername = localStorage.getItem(REMEMBERED_USERNAME_KEY) || "";
+    if (!rememberedUsername) return null;
+    try {
+      const saved = await loadBrowserCredentials();
+      return saved?.username.toLowerCase() === rememberedUsername.toLowerCase() ? saved : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const saved = await window.sooderingCredentials.load() || {};
     return saved.username && saved.password ? saved : null;
@@ -358,7 +418,7 @@ function afterFirstPaint(callback) {
 }
 
 function accountContainsRowena(account) {
-  return /rowena/i.test(`${account?.username || ""} ${account?.name || ""}`);
+  return /rowena/i.test(String(account?.name || ""));
 }
 
 function hideRowenaNotification() {
@@ -368,13 +428,27 @@ function hideRowenaNotification() {
 
 function showRowenaNotification() {
   if (!accountContainsRowena(state.account)) return;
-  const accountKey = String(state.account.username || state.account.name || "rowena").toLowerCase();
+  const accountKey = String(state.account.name || "rowena").toLowerCase();
   if (state.rowenaNotificationKey === accountKey) return;
 
   state.rowenaNotificationKey = accountKey;
   rowenaNotification.hidden = false;
   clearTimeout(rowenaNotificationTimer);
   rowenaNotificationTimer = setTimeout(hideRowenaNotification, 8000);
+}
+
+function hideSystemNotification() {
+  clearTimeout(systemNotificationTimer);
+  systemNotification.hidden = true;
+}
+
+function showSystemNotification(title, message, { tone = "error", timeout = 10000 } = {}) {
+  systemNotificationTitle.textContent = title;
+  systemNotificationMessage.textContent = message;
+  systemNotification.dataset.tone = tone;
+  systemNotification.hidden = false;
+  clearTimeout(systemNotificationTimer);
+  systemNotificationTimer = setTimeout(hideSystemNotification, timeout);
 }
 
 function renderAccount() {
@@ -945,10 +1019,18 @@ loginForm.addEventListener("submit", async (event) => {
         password
       })
     });
-    if (rememberInput.checked) {
-      await rememberCredentials(username, password);
-    } else {
-      await forgetCredentials();
+    let credentialWarning = "";
+    try {
+      if (rememberInput.checked) {
+        const passwordStored = await rememberCredentials(username, password);
+        if (!passwordStored && !window.sooderingCredentials?.available) {
+          credentialWarning = "Your email was remembered, but this browser cannot securely save the password on this connection. Use HTTPS and enable the browser password manager.";
+        }
+      } else {
+        await forgetCredentials();
+      }
+    } catch {
+      credentialWarning = "Login succeeded, but the password could not be saved by the credential manager.";
     }
     state.account = data.account;
     recordActivity();
@@ -956,8 +1038,12 @@ loginForm.addEventListener("submit", async (event) => {
     afterFirstPaint(() => {
       refreshAccountData({ includeOrders: true, forceOrders: true });
     });
+    if (credentialWarning) {
+      showSystemNotification("Password not saved", credentialWarning, { tone: "warning", timeout: 12000 });
+    }
   } catch (error) {
     accountStatus.textContent = error.message;
+    showSystemNotification("Login unsuccessful", error.message);
   } finally {
     loginButton.disabled = false;
   }
@@ -969,6 +1055,7 @@ logoutButton.addEventListener("click", async () => {
 
 usageRefreshButton.addEventListener("click", () => loadUsage({ force: true }));
 dismissRowenaNotification.addEventListener("click", hideRowenaNotification);
+dismissSystemNotification.addEventListener("click", hideSystemNotification);
 
 ordersList.addEventListener("click", async (event) => {
   const button = event.target.closest(".cancel-order-button");

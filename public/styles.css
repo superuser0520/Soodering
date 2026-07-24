@@ -663,7 +663,14 @@ button.is-loading::after {
   padding: 16px;
 }
 
-.easter-egg-notification {
+.remember-help {
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: -7px;
+}
+
+.easter-egg-notification,
+.system-notification {
   align-items: flex-start;
   animation: notification-pop 220ms ease-out;
   background: #fff7d6;
@@ -682,11 +689,13 @@ button.is-loading::after {
   z-index: 50;
 }
 
-.easter-egg-notification[hidden] {
+.easter-egg-notification[hidden],
+.system-notification[hidden] {
   display: none;
 }
 
-.easter-egg-notification div {
+.easter-egg-notification div,
+.system-notification div {
   display: grid;
   gap: 4px;
 }
@@ -695,15 +704,37 @@ button.is-loading::after {
   color: #8a5800;
 }
 
-.easter-egg-notification p {
+.easter-egg-notification p,
+.system-notification p {
   line-height: 1.4;
 }
 
-.easter-egg-notification button {
+.easter-egg-notification button,
+.system-notification button {
   flex: 0 0 auto;
   height: 34px;
   padding: 0;
   width: 34px;
+}
+
+.system-notification {
+  background: #fff0ef;
+  border-color: rgba(185, 28, 28, 0.24);
+  bottom: auto;
+  top: 22px;
+}
+
+.system-notification strong {
+  color: #b42318;
+}
+
+.system-notification[data-tone="warning"] {
+  background: #fff7d6;
+  border-color: rgba(180, 120, 0, 0.24);
+}
+
+.system-notification[data-tone="warning"] strong {
+  color: #8a5800;
 }
 
 @keyframes notification-pop {
@@ -1011,12 +1042,18 @@ button.is-loading::after {
 }
 
 @media (max-width: 430px) {
-  .easter-egg-notification {
+  .easter-egg-notification,
+  .system-notification {
     bottom: 12px;
     left: 12px;
     max-width: none;
     right: 12px;
     width: auto;
+  }
+
+  .system-notification {
+    bottom: auto;
+    top: 12px;
   }
 
   .topbar {

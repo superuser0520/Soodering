@@ -6,6 +6,7 @@ const {
   filterHiddenMenuItems,
   isSessionExpired,
   parseDates,
+  parseAccount,
   parseOrderDeliveryDate,
   parseOrders,
   parseProducts,
@@ -22,6 +23,17 @@ test("usage logs prefer the cafeteria display name", () => {
   assert.equal(usageUser({
     account: { username: "fallback@shimano.com.sg" }
   }), "fallback@shimano.com.sg");
+});
+
+test("account parsing prioritizes the Hello display name", () => {
+  const account = parseAccount(`
+    <strong>Wallet balance</strong>
+    <div class="woocommerce-MyAccount-content">
+      <p>Hello <strong>Rowena Tan</strong></p>
+      <em>#12345</em>
+    </div>
+  `);
+  assert.deepEqual(account, { name: "Rowena Tan", staffId: "12345" });
 });
 
 test("decodes cafeteria HTML and preserves correct Unicode", () => {

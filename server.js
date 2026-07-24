@@ -350,7 +350,9 @@ async function readProtectedPage(session, pathname) {
 }
 
 function parseAccount(html) {
-  const name = html.match(/<strong>([^<]+)<\/strong>/i)?.[1] || html.match(/woocommerce-MyAccount-content[\s\S]*?<p>\s*Hello\s*<strong>([^<]+)/i)?.[1] || "";
+  const name = html.match(/Hello\s*<strong[^>]*>([\s\S]*?)<\/strong>/i)?.[1]
+    || html.match(/woocommerce-MyAccount-content[\s\S]*?<strong[^>]*>([\s\S]*?)<\/strong>/i)?.[1]
+    || "";
   const staffId = html.match(/<em>#([^<]+)<\/em>/i)?.[1] || "";
   return {
     name: stripTags(name),
@@ -1105,6 +1107,7 @@ module.exports = {
   parseDates,
   parseOrderDeliveryDate,
   parseOrders,
+  parseAccount,
   parseProducts,
   filterHiddenMenuItems,
   runIdempotentOperation,
