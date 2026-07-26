@@ -56,6 +56,9 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 | `USAGE_LOG_MAX_BYTES` | `2097152` (2 MB) |
 | `USAGE_LOG_RETENTION_DAYS` | `30` |
 | `MENU_CACHE_MS` | `300000` (5 minutes) |
+| `MENU_LOOKAHEAD_MONTHS` | `1` additional calendar month checked beyond the dropdown's starting month |
+| `EXTENDED_MENU_CACHE_MS` | `21600000` (6 hours) |
+| `MENU_FETCH_CONCURRENCY` | `6` concurrent date requests |
 
 ## Notes
 
@@ -70,3 +73,4 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 - The browser asks for confirmation before a real cafeteria order is submitted.
 - Repeated requests with the same operation ID return the original result instead of placing a duplicate order.
 - Usage records show the cafeteria display name, rotate by size, and are deleted after the configured retention period.
+- Menu discovery checks direct future date URLs instead of relying only on the cafeteria dropdown. Extended results are cached separately to avoid repeated bulk requests.

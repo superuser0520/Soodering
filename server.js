@@ -11,6 +11,7 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
 const MENU_CACHE_FILE = path.join(DATA_DIR, "menu-cache.json");
+const EXTENDED_MENU_CACHE_FILE = path.join(DATA_DIR, "extended-menu-cache.json");
 const DEFAULT_TIME_SLOTS = config.defaultTimeSlots;
 
 let cachedMenus = null;
@@ -768,6 +769,137 @@ function parseProducts(html, date) {
   }).filter(Boolean);
 }
 
+function menuPageOffersDate(html, date) {
+  const inputs = html.match(/<input\b[^>]*>/gi) || [];
+  return inputs.some((input) => {
+    const name = input.match(/\bname=["']([^"']+)["']/i)?.[1] || "";
+    const value = input.match(/\bvalue=["']([^"']+)["']/i)?.[1] || "";
+    return name === "deli_date" && value === date;
+  });
+}
+
+function addIsoDays(date, offset) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + offset);
+  return value.toISOString().slice(0, 10);
+}
+
+function menuDateLabel(date) {
+  return new Intl.DateTimeFormat("en-SG", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(new Date(`${date}T00:00:00Z`));
+}
+
+function buildMenuDateRange(startDate, monthsAhead = 1) {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(Date.UTC(
+    start.getUTCFullYear(),
+    start.getUTCMonth() + monthsAhead + 1,
+    0
+  ));
+  const totalDays = Math.floor((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  return Array.from({ length: totalDays }, (_, index) => {
+    const date = addIsoDays(startDate, index);
+    return {
+      date,
+      label: menuDateLabel(date),
+      url: `${SITE_ORIGIN}/lunch/?menu-date=${date}`
+    };
+  });
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  if (items.length === 0) return [];
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  async function runWorker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      try {
+        results[index] = { status: "fulfilled", value: await worker(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, runWorker));
+  return results;
+}
+
+async function fetchMenuDay(day) {
+  const html = await fetchHtml(day.url);
+  return {
+    ...day,
+    orderUrl: day.url,
+    products: menuPageOffersDate(html, day.date) ? parseProducts(html, day.date) : []
+  };
+}
+
+async function readExtendedMenuCache() {
+  try {
+    const parsed = JSON.parse(await readFile(EXTENDED_MENU_CACHE_FILE, "utf8"));
+    return parsed && typeof parsed.dates === "object" ? parsed : { dates: {} };
+  } catch (error) {
+    if (error.code === "ENOENT" || error instanceof SyntaxError) return { dates: {} };
+    throw error;
+  }
+}
+
+async function loadExtendedMenuDays(startDate, officialDates, now) {
+  const cache = await readExtendedMenuCache();
+  const official = new Set(officialDates);
+  const candidates = buildMenuDateRange(startDate, config.menuLookaheadMonths)
+    .filter((day) => !official.has(day.date));
+  const cachedDays = [];
+  const staleDays = [];
+
+  for (const day of candidates) {
+    const entry = cache.dates[day.date];
+    const fetchedAt = Date.parse(entry?.fetchedAt || "");
+    if (entry && Number.isFinite(fetchedAt) && now - fetchedAt < config.extendedMenuCacheMs) {
+      if (entry.day?.products?.length) cachedDays.push(entry.day);
+    } else {
+      staleDays.push(day);
+    }
+  }
+
+  const settled = await mapWithConcurrency(staleDays, config.menuFetchConcurrency, fetchMenuDay);
+  const fetchedDays = [];
+  settled.forEach((result, index) => {
+    const date = staleDays[index].date;
+    if (result.status === "fulfilled") {
+      const day = result.value.products.length ? result.value : null;
+      cache.dates[date] = { fetchedAt: new Date(now).toISOString(), day };
+      if (day) fetchedDays.push(day);
+    } else if (cache.dates[date]?.day?.products?.length) {
+      fetchedDays.push(cache.dates[date].day);
+    }
+  });
+
+  const candidateSet = new Set(candidates.map((day) => day.date));
+  cache.dates = Object.fromEntries(
+    Object.entries(cache.dates).filter(([date]) => candidateSet.has(date))
+  );
+  await mkdir(DATA_DIR, { recursive: true });
+  await writeFile(EXTENDED_MENU_CACHE_FILE, JSON.stringify(cache), "utf8");
+  return [...cachedDays, ...fetchedDays];
+}
+
+function mergeMenuDays(...groups) {
+  const byDate = new Map();
+  for (const day of groups.flat()) {
+    if (day?.date) byDate.set(day.date, day);
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
 async function loadMenus(force = false) {
   const now = Date.now();
   if (!force && cachedMenus) {
@@ -837,22 +969,29 @@ async function loadMenusUncached() {
   const now = Date.now();
 
   const firstPage = await fetchHtml(LUNCH_URL);
-  const dates = parseDates(firstPage);
-  if (dates.length === 0) {
+  const dropdownDates = parseDates(firstPage).sort((a, b) => a.date.localeCompare(b.date));
+  if (dropdownDates.length === 0) {
     throw new Error("No selectable lunch dates were found.");
   }
 
-  const settledDays = await Promise.allSettled(dates.map(async (day) => {
-    const html = await fetchHtml(day.url);
-    return {
-      ...day,
-      orderUrl: day.url,
-      products: parseProducts(html, day.date)
-    };
-  }));
-  const days = settledDays
+  const settledDays = await mapWithConcurrency(
+    dropdownDates,
+    config.menuFetchConcurrency,
+    fetchMenuDay
+  );
+  const dropdownDays = settledDays
     .filter((result) => result.status === "fulfilled")
     .map((result) => result.value);
+  const discoveryRange = buildMenuDateRange(
+    dropdownDates[0].date,
+    config.menuLookaheadMonths
+  );
+  const extendedDays = await loadExtendedMenuDays(
+    dropdownDates[0].date,
+    dropdownDates.map((day) => day.date),
+    now
+  );
+  const days = mergeMenuDays(extendedDays, dropdownDays);
 
   if (days.length === 0) {
     throw new Error("No lunch menu pages could be loaded.");
@@ -861,6 +1000,7 @@ async function loadMenusUncached() {
   cachedMenus = filterHiddenMenuItems({
     source: LUNCH_URL,
     fetchedAt: new Date().toISOString(),
+    discoveredThrough: discoveryRange.at(-1)?.date || dropdownDates.at(-1).date,
     days,
     totalProducts: days.reduce((sum, day) => sum + day.products.length, 0)
   });
@@ -1109,6 +1249,10 @@ module.exports = {
   parseOrders,
   parseAccount,
   parseProducts,
+  buildMenuDateRange,
+  mapWithConcurrency,
+  menuPageOffersDate,
+  mergeMenuDays,
   filterHiddenMenuItems,
   runIdempotentOperation,
   server,

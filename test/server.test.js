@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   decodeHtml,
   createSiteSession,
+  buildMenuDateRange,
   filterHiddenMenuItems,
   isSessionExpired,
   parseDates,
@@ -10,6 +11,9 @@ const {
   parseOrderDeliveryDate,
   parseOrders,
   parseProducts,
+  mapWithConcurrency,
+  menuPageOffersDate,
+  mergeMenuDays,
   runIdempotentOperation,
   splitStall,
   usageUser
@@ -62,6 +66,42 @@ test("parses dates and products from representative cafeteria markup", () => {
   assert.equal(products[0].stall, "Chinese Stall");
   assert.equal(products[0].item, "Chicken Rice");
   assert.equal(products[0].price, "$4.50");
+});
+
+test("discovers exact direct-date menus beyond the dropdown", () => {
+  const range = buildMenuDateRange("2026-07-27", 1);
+  assert.equal(range[0].date, "2026-07-27");
+  assert.equal(range.at(-1).date, "2026-08-31");
+  assert.match(range.find((day) => day.date === "2026-08-12").url, /menu-date=2026-08-12$/);
+
+  const exactPage = "<input type='hidden' name='deli_date' value='2026-08-12'>";
+  assert.equal(menuPageOffersDate(exactPage, "2026-08-12"), true);
+  assert.equal(menuPageOffersDate(exactPage, "2026-08-13"), false);
+});
+
+test("merges menu dates in order and prefers fresher official data", () => {
+  const extended = [
+    { date: "2026-08-12", products: [{ item: "Extended" }] },
+    { date: "2026-08-07", products: [{ item: "Old" }] }
+  ];
+  const official = [{ date: "2026-08-07", products: [{ item: "Fresh" }] }];
+  const merged = mergeMenuDays(extended, official);
+  assert.deepEqual(merged.map((day) => day.date), ["2026-08-07", "2026-08-12"]);
+  assert.equal(merged[0].products[0].item, "Fresh");
+});
+
+test("limits concurrent menu date requests", async () => {
+  let active = 0;
+  let peak = 0;
+  const results = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    return value * 2;
+  });
+  assert.equal(peak, 2);
+  assert.deepEqual(results.map((result) => result.value), [2, 4, 6, 8, 10]);
 });
 
 test("parses order dates and order rows", () => {
