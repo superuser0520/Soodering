@@ -12,9 +12,9 @@ const DATA_DIR = path.join(__dirname, "data");
 const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
 const MENU_CACHE_FILE = path.join(DATA_DIR, "menu-cache.json");
 const EXTENDED_MENU_CACHE_FILE = path.join(DATA_DIR, "extended-menu-cache.json");
-const COMMUNITY_ORDERS_FILE = path.join(DATA_DIR, "community-orders.json");
 const DEFAULT_TIME_SLOTS = config.defaultTimeSlots;
-const MENU_CACHE_VERSION = 2;
+const MENU_CACHE_VERSION = 3;
+const EXTENDED_MENU_CACHE_VERSION = 2;
 
 let cachedMenus = null;
 let cachedAt = 0;
@@ -26,7 +26,6 @@ const USAGE_ADMIN_EMAIL = config.usageAdminEmail;
 const sessions = new Map();
 let menuLoadPromise = null;
 let usageWriteChain = Promise.resolve();
-let communityOrderWriteChain = Promise.resolve();
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -216,85 +215,6 @@ function usageUser(session) {
   const displayName = String(session.account?.name || "").trim();
   if (displayName) return displayName;
   return String(session.account?.username || session.credentials?.username || "").trim();
-}
-
-function singaporeDateIso(now = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: "Asia/Singapore"
-  }).formatToParts(now);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function normalizedMealName(value = "") {
-  return String(value)
-    .toLowerCase()
-    .replace(/\bx\s*\d+\b/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\b(stall|side|set)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function orderQuantity(product = "") {
-  return [...String(product).matchAll(/\bx\s*(\d+)\b/gi)]
-    .reduce((sum, match) => sum + Number(match[1] || 0), 0) || 1;
-}
-
-function communityUserKey(session) {
-  const username = String(session.account?.username || session.credentials?.username || "")
-    .trim()
-    .toLowerCase();
-  return crypto.createHash("sha256").update(username).digest("hex");
-}
-
-async function readCommunityOrders() {
-  try {
-    const parsed = JSON.parse(await readFile(COMMUNITY_ORDERS_FILE, "utf8"));
-    return Array.isArray(parsed.orders) ? parsed.orders : [];
-  } catch (error) {
-    if (error.code === "ENOENT" || error instanceof SyntaxError) return [];
-    throw error;
-  }
-}
-
-function mutateCommunityOrders(mutator) {
-  const operation = communityOrderWriteChain.then(async () => {
-    const current = await readCommunityOrders();
-    const next = await mutator(current);
-    const oldestDate = addIsoDays(singaporeDateIso(), -1);
-    const orders = next.filter((order) => order.date >= oldestDate);
-    await mkdir(DATA_DIR, { recursive: true });
-    await writeFile(COMMUNITY_ORDERS_FILE, JSON.stringify({ orders }), "utf8");
-    return orders;
-  });
-  communityOrderWriteChain = operation.catch(() => {});
-  return operation;
-}
-
-function summarizeCommunityOrders(orders, date = singaporeDateIso()) {
-  const grouped = new Map();
-  for (const order of orders.filter((entry) => entry.date === date)) {
-    const key = `${order.stall}|${order.item}`;
-    const existing = grouped.get(key) || {
-      stall: order.stall,
-      item: order.item,
-      quantity: 0
-    };
-    existing.quantity += Number(order.quantity || 1);
-    grouped.set(key, existing);
-  }
-  const items = [...grouped.values()].sort((a, b) =>
-    b.quantity - a.quantity || a.stall.localeCompare(b.stall) || a.item.localeCompare(b.item)
-  );
-  return {
-    date,
-    totalMeals: items.reduce((sum, item) => sum + item.quantity, 0),
-    items
-  };
 }
 
 async function rotateUsageLogIfNeeded(nextBytes) {
@@ -716,12 +636,10 @@ async function placeBulkOrder(session, { selections = [], timeSlot = "", notes =
       });
     }
 
-    const orders = await loadOrders(session);
-    await syncCommunityOrders(session, orders);
     return {
       result: "success",
       placed: results,
-      orders
+      orders: await loadOrders(session)
     };
   } finally {
     try {
@@ -789,45 +707,6 @@ async function loadOrders(session) {
     seen.add(key);
     return true;
   });
-}
-
-function communityOrderFromSiteOrder(session, order, menus) {
-  const orderName = normalizedMealName(order.product);
-  const dayProducts = menus.days.find((day) => day.date === order.deliveryDate)?.products || [];
-  const menuProduct = dayProducts.find((product) => {
-    const itemName = normalizedMealName(product.item);
-    return itemName && (orderName.includes(itemName) || itemName.includes(orderName));
-  });
-  const fallback = splitStall(String(order.product || "").replace(/\bx\s*\d+\b/gi, "").trim());
-  return {
-    key: `${communityUserKey(session)}|${order.order}|${order.deliveryDate}|${orderName}`,
-    userKey: communityUserKey(session),
-    date: order.deliveryDate,
-    stall: menuProduct?.stall || fallback.stall,
-    item: menuProduct?.item || fallback.item,
-    quantity: orderQuantity(order.product),
-    orderedAt: new Date().toISOString()
-  };
-}
-
-async function syncCommunityOrders(session, orders) {
-  try {
-    const today = singaporeDateIso();
-    const activeOrders = orders.filter((order) =>
-      order.deliveryDate >= today && !/cancel/i.test(order.status || "")
-    );
-    const menus = await loadMenus();
-    const userKey = communityUserKey(session);
-    const accountOrders = activeOrders.map((order) =>
-      communityOrderFromSiteOrder(session, order, menus)
-    );
-    await mutateCommunityOrders((current) => [
-      ...current.filter((order) => order.userKey !== userKey),
-      ...accountOrders
-    ]);
-  } catch (error) {
-    console.warn(`Community order sync failed: ${error.message}`);
-  }
 }
 
 function parseDates(html) {
@@ -956,21 +835,41 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
-async function fetchMenuDay(day) {
-  const html = await fetchHtml(day.url);
-  return {
-    ...day,
-    orderUrl: day.url,
-    products: menuPageOffersDate(html, day.date) ? parseProducts(html, day.date) : []
-  };
+async function fetchMenuDay(day, { attempts = 2 } = {}) {
+  let lastError = null;
+  let lastDay = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const html = await fetchHtml(day.url);
+      const offersDate = menuPageOffersDate(html, day.date);
+      lastDay = {
+        ...day,
+        orderUrl: day.url,
+        products: offersDate ? parseProducts(html, day.date) : []
+      };
+      if (offersDate) return lastDay;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+    }
+  }
+  if (lastDay) return lastDay;
+  throw lastError || new Error(`Menu date ${day.date} could not be loaded.`);
 }
 
 async function readExtendedMenuCache() {
   try {
     const parsed = JSON.parse(await readFile(EXTENDED_MENU_CACHE_FILE, "utf8"));
-    return parsed && typeof parsed.dates === "object" ? parsed : { dates: {} };
+    return parsed?.cacheVersion === EXTENDED_MENU_CACHE_VERSION
+      && typeof parsed.dates === "object"
+      ? parsed
+      : { cacheVersion: EXTENDED_MENU_CACHE_VERSION, dates: {} };
   } catch (error) {
-    if (error.code === "ENOENT" || error instanceof SyntaxError) return { dates: {} };
+    if (error.code === "ENOENT" || error instanceof SyntaxError) {
+      return { cacheVersion: EXTENDED_MENU_CACHE_VERSION, dates: {} };
+    }
     throw error;
   }
 }
@@ -994,8 +893,13 @@ async function loadExtendedMenuDays(startDate, officialDates, now, { force = fal
     }
   }
 
-  const settled = await mapWithConcurrency(staleDays, config.menuFetchConcurrency, fetchMenuDay);
+  const settled = await mapWithConcurrency(
+    staleDays,
+    Math.min(config.menuFetchConcurrency, 3),
+    fetchMenuDay
+  );
   const fetchedDays = [];
+  let failedDates = 0;
   settled.forEach((result, index) => {
     const date = staleDays[index].date;
     if (result.status === "fulfilled") {
@@ -1003,7 +907,10 @@ async function loadExtendedMenuDays(startDate, officialDates, now, { force = fal
       cache.dates[date] = { fetchedAt: new Date(now).toISOString(), day };
       if (day) fetchedDays.push(day);
     } else if (cache.dates[date]?.day?.products?.length) {
+      failedDates += 1;
       fetchedDays.push(cache.dates[date].day);
+    } else {
+      failedDates += 1;
     }
   });
 
@@ -1013,7 +920,13 @@ async function loadExtendedMenuDays(startDate, officialDates, now, { force = fal
   );
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(EXTENDED_MENU_CACHE_FILE, JSON.stringify(cache), "utf8");
-  return [...cachedDays, ...fetchedDays];
+  const days = [...cachedDays, ...fetchedDays];
+  return {
+    days,
+    checked: candidates.length,
+    found: days.length,
+    failed: failedDates
+  };
 }
 
 function mergeMenuDays(...groups) {
@@ -1118,13 +1031,13 @@ async function loadMenusUncached({ forceExtended = false } = {}) {
     dropdownDates[0].date,
     config.menuLookaheadMonths
   );
-  const extendedDays = await loadExtendedMenuDays(
+  const extended = await loadExtendedMenuDays(
     dropdownDates[0].date,
     dropdownDates.map((day) => day.date),
     now,
     { force: forceExtended }
   );
-  const days = mergeMenuDays(extendedDays, dropdownDays);
+  const days = mergeMenuDays(extended.days, dropdownDays);
 
   if (days.length === 0) {
     throw new Error("No lunch menu pages could be loaded.");
@@ -1135,6 +1048,11 @@ async function loadMenusUncached({ forceExtended = false } = {}) {
     source: LUNCH_URL,
     fetchedAt: new Date().toISOString(),
     discoveredThrough: discoveryRange.at(-1)?.date || dropdownDates.at(-1).date,
+    discovery: {
+      checked: extended.checked,
+      found: extended.found,
+      failed: extended.failed
+    },
     days,
     totalProducts: days.reduce((sum, day) => sum + day.products.length, 0)
   });
@@ -1258,23 +1176,14 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/orders") {
       const orders = await loadOrders(session);
-      await syncCommunityOrders(session, orders);
       await trackUsage(request, session, "orders.view", { count: orders.length });
       sendJson(response, 200, { orders });
-      return;
-    }
-
-    if (url.pathname === "/api/today-orders") {
-      await ensureLoggedIn(session);
-      const summary = summarizeCommunityOrders(await readCommunityOrders());
-      sendJson(response, 200, summary);
       return;
     }
 
     if (url.pathname === "/api/order/cancel" && request.method === "POST") {
       const { cancelUrl } = await readJsonBody(request);
       const result = await cancelOrder(session, cancelUrl);
-      await syncCommunityOrders(session, result.orders);
       await trackUsage(request, session, "order.cancel", { orders: result.orders.length });
       sendJson(response, 200, result);
       return;
@@ -1313,7 +1222,6 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/order/place" && request.method === "POST") {
       const result = await placeOrder(session, await readJsonBody(request));
-      await syncCommunityOrders(session, result.orders);
       await trackUsage(request, session, "order.place", { result: result.result });
       sendJson(response, 200, result);
       return;
@@ -1399,8 +1307,6 @@ module.exports = {
   mergeMenuDays,
   extendedMenuEntryCacheMs,
   filterHiddenMenuItems,
-  singaporeDateIso,
-  summarizeCommunityOrders,
   runIdempotentOperation,
   server,
   splitStall,

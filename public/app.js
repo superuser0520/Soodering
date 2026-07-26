@@ -2,6 +2,7 @@ const CREDENTIALS_KEY = "soodering.credentials";
 const LEGACY_CREDENTIALS_KEY = "shimanoLunch.credentials";
 const REMEMBERED_USERNAME_KEY = "soodering.rememberedUsername";
 const KEEPALIVE_MS = 4 * 60 * 1000;
+const MENU_AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 const state = {
   account: null,
@@ -12,8 +13,6 @@ const state = {
   upcomingOrders: [],
   ordersLoaded: false,
   ordersLoading: false,
-  todayOrdersLoaded: false,
-  todayOrdersLoading: false,
   usageLoaded: false,
   usageLoading: false,
   walletLoading: false,
@@ -27,6 +26,7 @@ const state = {
   },
   lastActivityAt: Date.now(),
   idleTimer: null,
+  menuRefreshTimer: null,
   orderKeys: new Map(),
   rowenaNotificationKey: null
 };
@@ -524,24 +524,33 @@ function renderOrders(payload) {
       </div>
     </div>
   `).join("") || `<p class="meta">No upcoming orders from today onward.</p>`;
+  renderTodayOrders(upcoming.filter((order) => order.deliveryDate === today));
   renderCredit();
   renderMenus();
 }
 
-function renderTodayOrders(payload) {
-  const totalMeals = Number(payload.totalMeals || 0);
+function renderTodayOrders(orders) {
+  const totalMeals = orders.reduce((sum, order) => sum + parseOrderQuantity(order.product), 0);
   todayOrdersCount.textContent = `${totalMeals} meal${totalMeals === 1 ? "" : "s"}`;
-  todayOrdersStatus.textContent = `${formatDate(payload.date || todayIso())} · Anonymous totals from orders checked in SooDering.`;
-  todayOrdersList.innerHTML = (payload.items || []).map((item) => `
+  todayOrdersStatus.textContent = `${formatDate(todayIso())} · Signed-in account only.`;
+  todayOrdersList.innerHTML = orders.map((order) => {
+    const product = String(order.product || "");
+    const stall = /chinese/i.test(product)
+      ? "Chinese Stall"
+      : /malay/i.test(product)
+        ? "Malay Stall"
+        : "International Stall";
+    return `
     <article class="today-order-item">
-      <img src="${stallLogoPath(item.stall)}" alt="" aria-hidden="true">
+      <img src="${stallLogoPath(stall)}" alt="" aria-hidden="true">
       <div class="today-order-copy">
-        <strong>${escapeHtml(item.item)}</strong>
-        <span>${escapeHtml(item.stall)}</span>
+        <strong>${escapeHtml(product)}</strong>
+        <span>${escapeHtml(order.total || order.status || "Ordered")}</span>
       </div>
-      <strong class="today-order-quantity">×${Number(item.quantity || 1)}</strong>
+      <strong class="today-order-quantity">×${parseOrderQuantity(product)}</strong>
     </article>
-  `).join("") || `<p class="empty-state">No SooDering users have checked an order for today yet.</p>`;
+  `;
+  }).join("") || `<p class="empty-state">You have no cafeteria order for today.</p>`;
 }
 
 function describeUsage(entry) {
@@ -818,7 +827,14 @@ function renderCredit() {
 function renderMenus() {
   if (!state.data) return;
   const lastDay = state.data.days[state.data.days.length - 1];
-  statusEl.textContent = lastDay ? `Orders are available until ${formatDate(lastDay.date)}.` : "No order dates available.";
+  const scanEnd = state.data.discoveredThrough;
+  const scanCopy = scanEnd ? ` Direct-date scan checked through ${formatDate(scanEnd)}.` : "";
+  const failureCopy = state.data.discovery?.failed
+    ? ` ${state.data.discovery.failed} date${state.data.discovery.failed === 1 ? "" : "s"} could not be checked; Refresh to retry.`
+    : "";
+  statusEl.textContent = lastDay
+    ? `Orders are available until ${formatDate(lastDay.date)}.${scanCopy}${failureCopy}`
+    : `No order dates available.${scanCopy}${failureCopy}`;
 
   const visibleDays = state.data.days.filter((day) => {
     const alreadyOrdered = state.orderedDates?.has(day.date);
@@ -850,6 +866,8 @@ async function loadMenus(refresh = false) {
   try {
     state.data = withoutHiddenMenuItems(await api(`/api/menus${refresh ? "?refresh=1" : ""}`, { headers: {} }));
     renderMenus();
+    clearTimeout(state.menuRefreshTimer);
+    state.menuRefreshTimer = setTimeout(() => loadMenus(false), state.data.refreshing ? 1500 : MENU_AUTO_REFRESH_MS);
   } catch (error) {
     statusEl.textContent = error.message;
     menusEl.innerHTML = "";
@@ -878,6 +896,7 @@ async function loadOrders({ force = false } = {}) {
   if (state.ordersLoaded && !force) return;
 
   state.ordersLoading = true;
+  todayOrdersRefreshButton.disabled = true;
   if (state.activeTab === "orders") {
     ordersList.innerHTML = `<p class="meta">Loading upcoming orders...</p>`;
   }
@@ -886,31 +905,10 @@ async function loadOrders({ force = false } = {}) {
     const orders = await api("/api/orders", { headers: {} });
     state.ordersLoaded = true;
     renderOrders(orders);
-    await loadTodayOrders({ force: true });
   } catch (error) {
     ordersList.innerHTML = `<p class="meta">${escapeHtml(error.message)}</p>`;
   } finally {
     state.ordersLoading = false;
-  }
-}
-
-async function loadTodayOrders({ force = false } = {}) {
-  if (!state.account) return;
-  if (state.todayOrdersLoading) return;
-  if (state.todayOrdersLoaded && !force) return;
-
-  state.todayOrdersLoading = true;
-  todayOrdersRefreshButton.disabled = true;
-  todayOrdersStatus.textContent = "Loading today’s orders...";
-  try {
-    const payload = await api("/api/today-orders", { headers: {} });
-    state.todayOrdersLoaded = true;
-    renderTodayOrders(payload);
-  } catch (error) {
-    todayOrdersStatus.textContent = error.message;
-    todayOrdersList.innerHTML = "";
-  } finally {
-    state.todayOrdersLoading = false;
     todayOrdersRefreshButton.disabled = false;
   }
 }
@@ -971,8 +969,6 @@ function resetSignedOutState(message = "Sign in to order lunch.") {
   state.walletBalance = "";
   state.ordersLoaded = false;
   state.ordersLoading = false;
-  state.todayOrdersLoaded = false;
-  state.todayOrdersLoading = false;
   state.usageLoaded = false;
   state.usageLoading = false;
   accountStatus.textContent = message;
@@ -981,7 +977,7 @@ function resetSignedOutState(message = "Sign in to order lunch.") {
   ordersList.innerHTML = "";
   todayOrdersList.innerHTML = "";
   todayOrdersCount.textContent = "0 meals";
-  todayOrdersStatus.textContent = "Loading today’s SooDering orders...";
+  todayOrdersStatus.textContent = "Loading your cafeteria order...";
   usageList.innerHTML = "";
   usageStatus.textContent = "Recent SooDering activity.";
   renderCredit();

@@ -58,14 +58,14 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 | `MENU_CACHE_MS` | `300000` (5 minutes) |
 | `MENU_LOOKAHEAD_MONTHS` | `1` additional calendar month checked beyond the dropdown's starting month |
 | `EXTENDED_MENU_CACHE_MS` | `21600000` (6 hours) |
-| `MENU_FETCH_CONCURRENCY` | `6` concurrent date requests |
+| `MENU_FETCH_CONCURRENCY` | `3` concurrent date requests |
 
 ## Notes
 
 - The browser version remembers only the email and leaves password storage to the browser's password manager. The Electron desktop app stores both using the operating system's encrypted credential facility.
 - Login sessions are kept only in memory and expire after 30 minutes of inactivity by default.
 - After login, the app automatically shows wallet balance and upcoming orders from today onward.
-- The menu homepage shows anonymous totals for today’s orders checked by SooDering users, including cafeteria orders made outside SooDering once that user’s order list is refreshed.
+- The menu homepage shows today’s cafeteria order for the currently signed-in user.
 - Upcoming orders show the ordered item and price.
 - Upcoming orders can be cancelled from the app when the cafeteria provides a cancel link.
 - Pick one meal per date, then use `Place selected orders`.
@@ -74,4 +74,4 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 - The browser asks for confirmation before a real cafeteria order is submitted.
 - Repeated requests with the same operation ID return the original result instead of placing a duplicate order.
 - Usage records show the cafeteria display name, rotate by size, and are deleted after the configured retention period.
-- Menu discovery checks direct future date URLs instead of relying only on the cafeteria dropdown. Published results are cached separately, while missing dates are retried after five minutes and every manual refresh checks them immediately.
+- Menu discovery checks direct future date URLs instead of relying only on the cafeteria dropdown. Published results are cached separately, missing dates retry after five minutes, and the page automatically follows background updates. Manual refresh immediately retries every direct date.

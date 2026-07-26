@@ -32,7 +32,7 @@ const config = {
   menuCacheMs: numberFromEnv("MENU_CACHE_MS", 5 * 60 * 1000),
   menuLookaheadMonths: numberFromEnv("MENU_LOOKAHEAD_MONTHS", 1, { min: 0, max: 6 }),
   extendedMenuCacheMs: numberFromEnv("EXTENDED_MENU_CACHE_MS", 6 * 60 * 60 * 1000, { min: 60_000 }),
-  menuFetchConcurrency: numberFromEnv("MENU_FETCH_CONCURRENCY", 6, { min: 1, max: 12 }),
+  menuFetchConcurrency: numberFromEnv("MENU_FETCH_CONCURRENCY", 3, { min: 1, max: 12 }),
   sessionIdleTimeoutMs: numberFromEnv("SESSION_IDLE_TIMEOUT_MS", 30 * 60 * 1000, { min: 60_000 }),
   sessionCookieMaxAgeMs: numberFromEnv("SESSION_COOKIE_MAX_AGE_MS", 24 * 60 * 60 * 1000, { min: 60_000 }),
   usageAdminEmail: (process.env.USAGE_ADMIN_EMAIL || "soolihjing@shimano.com.sg").toLowerCase(),

@@ -16,9 +16,7 @@ const {
   menuPageOffersDate,
   mergeMenuDays,
   runIdempotentOperation,
-  singaporeDateIso,
   splitStall,
-  summarizeCommunityOrders,
   usageUser
 } = require("../server");
 
@@ -113,22 +111,6 @@ test("limits concurrent menu date requests", async () => {
   });
   assert.equal(peak, 2);
   assert.deepEqual(results.map((result) => result.value), [2, 4, 6, 8, 10]);
-});
-
-test("summarizes today's community orders without exposing people", () => {
-  assert.equal(singaporeDateIso(new Date("2026-07-26T16:30:00Z")), "2026-07-27");
-  const summary = summarizeCommunityOrders([
-    { date: "2026-07-27", stall: "Chinese Stall", item: "Chicken Rice", quantity: 1, userKey: "a" },
-    { date: "2026-07-27", stall: "Chinese Stall", item: "Chicken Rice", quantity: 2, userKey: "b" },
-    { date: "2026-07-27", stall: "Malay Stall", item: "Nasi Lemak", quantity: 1, userKey: "c" },
-    { date: "2026-07-28", stall: "Other", item: "Tomorrow", quantity: 5, userKey: "d" }
-  ], "2026-07-27");
-  assert.equal(summary.totalMeals, 4);
-  assert.deepEqual(summary.items, [
-    { stall: "Chinese Stall", item: "Chicken Rice", quantity: 3 },
-    { stall: "Malay Stall", item: "Nasi Lemak", quantity: 1 }
-  ]);
-  assert.equal(JSON.stringify(summary).includes("userKey"), false);
 });
 
 test("parses order dates and order rows", () => {
