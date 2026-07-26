@@ -6,7 +6,7 @@
     <title>SooDering</title>
     <link rel="icon" href="/soodering-icon.png" type="image/png">
     <link rel="apple-touch-icon" href="/soodering-icon.png">
-    <link rel="stylesheet" href="/styles.css?v=18">
+    <link rel="stylesheet" href="/styles.css?v=19">
   </head>
   <body>
     <main class="app-shell">
@@ -123,6 +123,21 @@
         </section>
 
         <section id="menuView" class="tab-panel">
+        <section class="panel today-orders-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Today at a glance</p>
+              <h2>What people ordered</h2>
+              <p id="todayOrdersStatus" class="meta">Loading today’s SooDering orders...</p>
+            </div>
+            <div class="today-orders-actions">
+              <strong id="todayOrdersCount" class="today-orders-count">0 meals</strong>
+              <button id="todayOrdersRefreshButton" class="secondary" type="button">Refresh</button>
+            </div>
+          </div>
+          <div id="todayOrdersList" class="today-orders-list" aria-live="polite"></div>
+        </section>
+
         <section class="panel basket-panel">
           <div class="panel-heading">
             <div>
@@ -173,6 +188,6 @@
       <button id="dismissSystemNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
     </aside>
 
-    <script src="/app.js?v=20"></script>
+    <script src="/app.js?v=21"></script>
   </body>
 </html>

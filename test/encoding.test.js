@@ -32,3 +32,15 @@ test("login failures and native password storage have visible handling", async (
   assert.match(html, /id="systemNotification"/);
   assert.doesNotMatch(app, /localStorage\.setItem\([^,]+,\s*password/);
 });
+
+test("homepage includes an anonymous today-order quick view", async () => {
+  const app = await readFile("public/app.js", "utf8");
+  const html = await readFile("public/index.html", "utf8");
+  const styles = await readFile("public/styles.css", "utf8");
+  const renderer = app.match(/function renderTodayOrders\(payload\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(html, /id="todayOrdersList"/);
+  assert.match(html, /What people ordered/);
+  assert.match(styles, /\.today-orders-list/);
+  assert.match(renderer, /payload\.items/);
+  assert.doesNotMatch(renderer, /item\.(?:user|name|email)/i);
+});

@@ -12,6 +12,8 @@ const state = {
   upcomingOrders: [],
   ordersLoaded: false,
   ordersLoading: false,
+  todayOrdersLoaded: false,
+  todayOrdersLoading: false,
   usageLoaded: false,
   usageLoading: false,
   walletLoading: false,
@@ -52,6 +54,10 @@ const creditUpcoming = document.querySelector("#creditUpcoming");
 const creditProjected = document.querySelector("#creditProjected");
 const ordersList = document.querySelector("#ordersList");
 const ordersTabCount = document.querySelector("#ordersTabCount");
+const todayOrdersList = document.querySelector("#todayOrdersList");
+const todayOrdersStatus = document.querySelector("#todayOrdersStatus");
+const todayOrdersCount = document.querySelector("#todayOrdersCount");
+const todayOrdersRefreshButton = document.querySelector("#todayOrdersRefreshButton");
 const cartStatus = document.querySelector("#cartStatus");
 const cartList = document.querySelector("#cartList");
 const orderProgress = document.querySelector("#orderProgress");
@@ -522,6 +528,22 @@ function renderOrders(payload) {
   renderMenus();
 }
 
+function renderTodayOrders(payload) {
+  const totalMeals = Number(payload.totalMeals || 0);
+  todayOrdersCount.textContent = `${totalMeals} meal${totalMeals === 1 ? "" : "s"}`;
+  todayOrdersStatus.textContent = `${formatDate(payload.date || todayIso())} · Anonymous totals from orders checked in SooDering.`;
+  todayOrdersList.innerHTML = (payload.items || []).map((item) => `
+    <article class="today-order-item">
+      <img src="${stallLogoPath(item.stall)}" alt="" aria-hidden="true">
+      <div class="today-order-copy">
+        <strong>${escapeHtml(item.item)}</strong>
+        <span>${escapeHtml(item.stall)}</span>
+      </div>
+      <strong class="today-order-quantity">×${Number(item.quantity || 1)}</strong>
+    </article>
+  `).join("") || `<p class="empty-state">No SooDering users have checked an order for today yet.</p>`;
+}
+
 function describeUsage(entry) {
   const parts = [entry.action];
   if (entry.user) parts.push(entry.user);
@@ -864,10 +886,32 @@ async function loadOrders({ force = false } = {}) {
     const orders = await api("/api/orders", { headers: {} });
     state.ordersLoaded = true;
     renderOrders(orders);
+    await loadTodayOrders({ force: true });
   } catch (error) {
     ordersList.innerHTML = `<p class="meta">${escapeHtml(error.message)}</p>`;
   } finally {
     state.ordersLoading = false;
+  }
+}
+
+async function loadTodayOrders({ force = false } = {}) {
+  if (!state.account) return;
+  if (state.todayOrdersLoading) return;
+  if (state.todayOrdersLoaded && !force) return;
+
+  state.todayOrdersLoading = true;
+  todayOrdersRefreshButton.disabled = true;
+  todayOrdersStatus.textContent = "Loading today’s orders...";
+  try {
+    const payload = await api("/api/today-orders", { headers: {} });
+    state.todayOrdersLoaded = true;
+    renderTodayOrders(payload);
+  } catch (error) {
+    todayOrdersStatus.textContent = error.message;
+    todayOrdersList.innerHTML = "";
+  } finally {
+    state.todayOrdersLoading = false;
+    todayOrdersRefreshButton.disabled = false;
   }
 }
 
@@ -927,12 +971,17 @@ function resetSignedOutState(message = "Sign in to order lunch.") {
   state.walletBalance = "";
   state.ordersLoaded = false;
   state.ordersLoading = false;
+  state.todayOrdersLoaded = false;
+  state.todayOrdersLoading = false;
   state.usageLoaded = false;
   state.usageLoading = false;
   accountStatus.textContent = message;
   renderAccount();
   walletBalance.textContent = "-";
   ordersList.innerHTML = "";
+  todayOrdersList.innerHTML = "";
+  todayOrdersCount.textContent = "0 meals";
+  todayOrdersStatus.textContent = "Loading today’s SooDering orders...";
   usageList.innerHTML = "";
   usageStatus.textContent = "Recent SooDering activity.";
   renderCredit();
@@ -980,7 +1029,12 @@ async function bootstrap() {
   await loadSession();
 }
 
-refreshButton.addEventListener("click", () => loadMenus(true));
+refreshButton.addEventListener("click", async () => {
+  await Promise.all([
+    loadMenus(true),
+    state.account ? loadOrders({ force: true }) : Promise.resolve()
+  ]);
+});
 
 tabButtons.forEach((button) => {
   button.addEventListener("click", () => {
@@ -1054,6 +1108,7 @@ logoutButton.addEventListener("click", async () => {
 });
 
 usageRefreshButton.addEventListener("click", () => loadUsage({ force: true }));
+todayOrdersRefreshButton.addEventListener("click", () => loadOrders({ force: true }));
 dismissRowenaNotification.addEventListener("click", hideRowenaNotification);
 dismissSystemNotification.addEventListener("click", hideSystemNotification);
 
