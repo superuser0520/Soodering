@@ -1310,10 +1310,11 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const rules = await readNotificationRules();
+      const notification = matchingNotification(session.account, rules);
       if ((session.account?.username || "").toLowerCase() === USAGE_ADMIN_EMAIL) {
-        sendJson(response, 200, { rules });
+        sendJson(response, 200, { rules, notification });
       } else {
-        sendJson(response, 200, { notification: matchingNotification(session.account, rules) });
+        sendJson(response, 200, { notification });
       }
       return;
     }
