@@ -440,7 +440,7 @@ async function showRowenaNotification() {
   if (state.rowenaNotificationKey === accountKey) return;
 
   try {
-    const data = await api("/api/custom-notifications", { headers: {} });
+    const data = await api("/api/session", { headers: {} });
     if (!data.notification) return;
     rowenaNotificationTitle.textContent = data.notification.title;
     rowenaNotificationMessage.textContent = data.notification.message;
@@ -957,11 +957,8 @@ async function loadUsage({ force = false } = {}) {
   usageStatus.textContent = "Loading usage log...";
 
   try {
-    const [data, rowenaData] = await Promise.all([
-      api("/api/usage?limit=100", { headers: {} }),
-      api("/api/custom-notifications", { headers: {} })
-    ]);
-    renderNotificationRules(rowenaData.rules);
+    const data = await api("/api/usage?limit=100", { headers: {} });
+    renderNotificationRules(data.rules);
     state.usageLoaded = true;
     renderUsage(data.entries || []);
   } catch (error) {
@@ -1153,7 +1150,7 @@ rowenaEditorForm.addEventListener("submit", async (event) => {
       title: row.querySelector(".notification-title").value,
       message: row.querySelector(".notification-message").value
     }));
-    await api("/api/custom-notifications", {
+    await api("/api/usage", {
       method: "POST",
       body: JSON.stringify({ rules })
     });

@@ -18,7 +18,7 @@ test("ordered menu dates use the concise status label", async () => {
 test("Rowena login Easter egg is case-insensitive and keeps the requested copy", async () => {
   const app = await readFile("public/app.js", "utf8");
   const html = await readFile("public/index.html", "utf8");
-  assert.match(app, /\/api\/custom-notifications/);
+  assert.match(app, /\/api\/session/);
   assert.match(app, /if \(!data\.notification\) return/);
   assert.match(html, /Dont eat so much yoghurt, eat proper food/);
 });

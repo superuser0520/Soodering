@@ -1201,7 +1201,12 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/session") {
-      sendJson(response, 200, { account: serializeAccount(session), idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS });
+      const rules = session.account ? await readNotificationRules() : [];
+      sendJson(response, 200, {
+        account: serializeAccount(session),
+        idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
+        notification: matchingNotification(session.account, rules)
+      });
       return;
     }
 
@@ -1293,10 +1298,17 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/usage") {
       await ensureLoggedIn(session);
       assertUsageAdmin(session);
+      if (request.method === "POST") {
+        const rules = await saveNotificationRules(await readJsonBody(request));
+        await trackUsage(request, session, "custom-notifications.update", { count: rules.length });
+        sendJson(response, 200, { rules });
+        return;
+      }
       const limit = Math.min(Number(url.searchParams.get("limit") || 100), 500);
       const entries = await readUsageLog(limit);
+      const rules = await readNotificationRules();
       await trackUsage(request, session, "usage.view", { count: entries.length });
-      sendJson(response, 200, { entries });
+      sendJson(response, 200, { entries, rules });
       return;
     }
 
