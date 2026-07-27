@@ -698,8 +698,8 @@ function addNotificationRule(rule = {}) {
   row.className = "notification-rule";
   row.dataset.id = rule.id || crypto.randomUUID();
   row.innerHTML = `
-    <label>Name or username contains
-      <input class="notification-match" maxlength="100" value="${escapeHtml(rule.match || "")}" placeholder="e.g. rowena" required>
+    <label>Username
+      <input class="notification-match" maxlength="100" value="${escapeHtml(rule.match || "")}" placeholder="Username" required>
     </label>
     <label>Title
       <input class="notification-title" maxlength="80" value="${escapeHtml(rule.title || "")}" required>

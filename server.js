@@ -342,8 +342,8 @@ async function saveNotificationRules(body) {
 }
 
 function matchingNotification(account, rules) {
-  const identity = `${account?.username || ""} ${account?.name || ""}`.toLowerCase();
-  return rules.find((rule) => identity.includes(rule.match)) || null;
+  const username = String(account?.username || "").toLowerCase();
+  return rules.find((rule) => username.includes(rule.match)) || null;
 }
 
 function serializeAccount(session) {
@@ -1300,7 +1300,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/api/custom-notifications") {
+    if (url.pathname === "/api/custom-notifications" || url.pathname === "/api/custom-notifications/") {
       await ensureLoggedIn(session);
       if (request.method === "POST") {
         assertUsageAdmin(session);
@@ -1308,6 +1308,11 @@ const server = http.createServer(async (request, response) => {
         await trackUsage(request, session, "custom-notifications.update", { count: rules.length });
         sendJson(response, 200, { rules });
         return;
+      }
+      if (request.method !== "GET") {
+        const error = new Error("This notification request method is not supported.");
+        error.status = 405;
+        throw error;
       }
       const rules = await readNotificationRules();
       const notification = matchingNotification(session.account, rules);
