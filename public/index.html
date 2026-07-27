@@ -110,6 +110,21 @@
         </section>
 
         <section id="usageView" class="tab-panel" hidden>
+          <section class="panel notification-editor-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Custom user notifications</h2>
+                <p id="rowenaEditorStatus" class="meta">Show a different message when a user's name or username contains a chosen word.</p>
+              </div>
+            </div>
+            <form id="rowenaEditorForm" class="notification-editor-form">
+              <div id="notificationRules"></div>
+              <div class="notification-editor-actions">
+                <button id="addNotificationRuleButton" class="secondary" type="button">Add user message</button>
+                <button id="saveRowenaMessageButton" type="submit">Save all messages</button>
+              </div>
+            </form>
+          </section>
           <section class="panel usage-panel">
             <div class="panel-heading">
               <div>
@@ -174,8 +189,9 @@
 
     <aside id="rowenaNotification" class="easter-egg-notification" role="alert" aria-live="assertive" hidden>
       <div>
-        <strong>Lunch reminder</strong>
-        <p>Dont eat so much yoghurt, eat proper food</p>
+        <span class="notification-badge" aria-hidden="true">!</span>
+        <strong id="rowenaNotificationTitle">Lunch reminder</strong>
+        <p id="rowenaNotificationMessage">Dont eat so much yoghurt, eat proper food</p>
       </div>
       <button id="dismissRowenaNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
     </aside>

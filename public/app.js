@@ -74,9 +74,16 @@ const usageTabButton = document.querySelector("#usageTabButton");
 const usageRefreshButton = document.querySelector("#usageRefreshButton");
 const usageList = document.querySelector("#usageList");
 const usageStatus = document.querySelector("#usageStatus");
+const rowenaEditorForm = document.querySelector("#rowenaEditorForm");
+const rowenaEditorStatus = document.querySelector("#rowenaEditorStatus");
+const notificationRules = document.querySelector("#notificationRules");
+const addNotificationRuleButton = document.querySelector("#addNotificationRuleButton");
+const saveRowenaMessageButton = document.querySelector("#saveRowenaMessageButton");
 const workspaceTitle = document.querySelector("#workspaceTitle");
 const workspaceSubtitle = document.querySelector("#workspaceSubtitle");
 const rowenaNotification = document.querySelector("#rowenaNotification");
+const rowenaNotificationTitle = document.querySelector("#rowenaNotificationTitle");
+const rowenaNotificationMessage = document.querySelector("#rowenaNotificationMessage");
 const dismissRowenaNotification = document.querySelector("#dismissRowenaNotification");
 const systemNotification = document.querySelector("#systemNotification");
 const systemNotificationTitle = document.querySelector("#systemNotificationTitle");
@@ -423,24 +430,27 @@ function afterFirstPaint(callback) {
   requestAnimationFrame(() => setTimeout(callback, 0));
 }
 
-function accountContainsRowena(account) {
-  return /rowena/i.test(String(account?.name || ""));
-}
-
 function hideRowenaNotification() {
   clearTimeout(rowenaNotificationTimer);
   rowenaNotification.hidden = true;
 }
 
-function showRowenaNotification() {
-  if (!accountContainsRowena(state.account)) return;
-  const accountKey = String(state.account.name || "rowena").toLowerCase();
+async function showRowenaNotification() {
+  const accountKey = String(state.account.username || state.account.name || "rowena").toLowerCase();
   if (state.rowenaNotificationKey === accountKey) return;
 
+  try {
+    const data = await api("/api/custom-notifications", { headers: {} });
+    if (!data.notification) return;
+    rowenaNotificationTitle.textContent = data.notification.title;
+    rowenaNotificationMessage.textContent = data.notification.message;
+  } catch {
+    return;
+  }
   state.rowenaNotificationKey = accountKey;
   rowenaNotification.hidden = false;
   clearTimeout(rowenaNotificationTimer);
-  rowenaNotificationTimer = setTimeout(hideRowenaNotification, 8000);
+  rowenaNotificationTimer = setTimeout(hideRowenaNotification, 15000);
 }
 
 function hideSystemNotification() {
@@ -683,6 +693,30 @@ function progressItemsFor(products) {
   }));
 }
 
+function addNotificationRule(rule = {}) {
+  const row = document.createElement("div");
+  row.className = "notification-rule";
+  row.dataset.id = rule.id || crypto.randomUUID();
+  row.innerHTML = `
+    <label>Name or username contains
+      <input class="notification-match" maxlength="100" value="${escapeHtml(rule.match || "")}" placeholder="e.g. rowena" required>
+    </label>
+    <label>Title
+      <input class="notification-title" maxlength="80" value="${escapeHtml(rule.title || "")}" required>
+    </label>
+    <label>Message
+      <textarea class="notification-message" maxlength="500" rows="3" required>${escapeHtml(rule.message || "")}</textarea>
+    </label>
+    <button class="secondary remove-notification-rule" type="button">Remove</button>
+  `;
+  notificationRules.appendChild(row);
+}
+
+function renderNotificationRules(rules) {
+  notificationRules.innerHTML = "";
+  (rules || []).forEach(addNotificationRule);
+}
+
 function orderOperationKey(item) {
   const selectionKey = `${item.date}|${item.id}`;
   if (!state.orderKeys.has(selectionKey)) {
@@ -923,7 +957,11 @@ async function loadUsage({ force = false } = {}) {
   usageStatus.textContent = "Loading usage log...";
 
   try {
-    const data = await api("/api/usage?limit=100", { headers: {} });
+    const [data, rowenaData] = await Promise.all([
+      api("/api/usage?limit=100", { headers: {} }),
+      api("/api/custom-notifications", { headers: {} })
+    ]);
+    renderNotificationRules(rowenaData.rules);
     state.usageLoaded = true;
     renderUsage(data.entries || []);
   } catch (error) {
@@ -1104,6 +1142,33 @@ logoutButton.addEventListener("click", async () => {
 });
 
 usageRefreshButton.addEventListener("click", () => loadUsage({ force: true }));
+rowenaEditorForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  saveRowenaMessageButton.disabled = true;
+  rowenaEditorStatus.textContent = "Saving...";
+  try {
+    const rules = [...notificationRules.querySelectorAll(".notification-rule")].map((row) => ({
+      id: row.dataset.id,
+      match: row.querySelector(".notification-match").value,
+      title: row.querySelector(".notification-title").value,
+      message: row.querySelector(".notification-message").value
+    }));
+    await api("/api/custom-notifications", {
+      method: "POST",
+      body: JSON.stringify({ rules })
+    });
+    rowenaEditorStatus.textContent = "All custom notifications saved.";
+  } catch (error) {
+    rowenaEditorStatus.textContent = error.message;
+  } finally {
+    saveRowenaMessageButton.disabled = false;
+  }
+});
+addNotificationRuleButton.addEventListener("click", () => addNotificationRule());
+notificationRules.addEventListener("click", (event) => {
+  const button = event.target.closest(".remove-notification-rule");
+  if (button) button.closest(".notification-rule").remove();
+});
 todayOrdersRefreshButton.addEventListener("click", () => loadOrders({ force: true }));
 dismissRowenaNotification.addEventListener("click", hideRowenaNotification);
 dismissSystemNotification.addEventListener("click", hideSystemNotification);

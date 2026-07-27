@@ -18,9 +18,8 @@ test("ordered menu dates use the concise status label", async () => {
 test("Rowena login Easter egg is case-insensitive and keeps the requested copy", async () => {
   const app = await readFile("public/app.js", "utf8");
   const html = await readFile("public/index.html", "utf8");
-  const trigger = app.match(/function accountContainsRowena\(account\) \{[\s\S]*?\n\}/)?.[0] || "";
-  assert.match(trigger, /\/rowena\/i\.test\(String\(account\?\.name/);
-  assert.doesNotMatch(trigger, /username/);
+  assert.match(app, /\/api\/custom-notifications/);
+  assert.match(app, /if \(!data\.notification\) return/);
   assert.match(html, /Dont eat so much yoghurt, eat proper food/);
 });
 

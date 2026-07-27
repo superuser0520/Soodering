@@ -10,6 +10,7 @@ const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
+const ROWENA_SETTINGS_FILE = path.join(DATA_DIR, "rowena-settings.json");
 const MENU_CACHE_FILE = path.join(DATA_DIR, "menu-cache.json");
 const EXTENDED_MENU_CACHE_FILE = path.join(DATA_DIR, "extended-menu-cache.json");
 const DEFAULT_TIME_SLOTS = config.defaultTimeSlots;
@@ -293,6 +294,56 @@ function assertUsageAdmin(session) {
     error.status = 403;
     throw error;
   }
+}
+
+const DEFAULT_NOTIFICATION_RULES = [{
+  id: "rowena",
+  match: "rowena",
+  title: "Lunch reminder",
+  message: "Dont eat so much yoghurt, eat proper food"
+}];
+
+function normalizeNotificationRules(rules) {
+  if (!Array.isArray(rules)) return [];
+  return rules.slice(0, 100).map((rule) => ({
+    id: String(rule.id || crypto.randomUUID()).slice(0, 80),
+    match: String(rule.match || "").trim().toLowerCase().slice(0, 100),
+    title: String(rule.title || "").trim().slice(0, 80),
+    message: String(rule.message || "").trim().slice(0, 500)
+  })).filter((rule) => rule.match && rule.title && rule.message);
+}
+
+async function readNotificationRules() {
+  try {
+    const saved = JSON.parse(await readFile(ROWENA_SETTINGS_FILE, "utf8"));
+    if (Array.isArray(saved.rules)) return normalizeNotificationRules(saved.rules);
+    // Migrate the original single Rowena notification format.
+    return normalizeNotificationRules([{
+      ...DEFAULT_NOTIFICATION_RULES[0],
+      title: saved.title,
+      message: saved.message
+    }]);
+  } catch (error) {
+    if (error.code === "ENOENT") return DEFAULT_NOTIFICATION_RULES.map((rule) => ({ ...rule }));
+    throw error;
+  }
+}
+
+async function saveNotificationRules(body) {
+  const rules = normalizeNotificationRules(body.rules);
+  if (!Array.isArray(body.rules) || rules.length !== body.rules.length) {
+    const error = new Error("Every rule needs a name match, title, and message.");
+    error.status = 400;
+    throw error;
+  }
+  await mkdir(DATA_DIR, { recursive: true });
+  await writeFile(ROWENA_SETTINGS_FILE, JSON.stringify({ rules }, null, 2), "utf8");
+  return rules;
+}
+
+function matchingNotification(account, rules) {
+  const identity = `${account?.username || ""} ${account?.name || ""}`.toLowerCase();
+  return rules.find((rule) => identity.includes(rule.match)) || null;
 }
 
 function serializeAccount(session) {
@@ -1246,6 +1297,24 @@ const server = http.createServer(async (request, response) => {
       const entries = await readUsageLog(limit);
       await trackUsage(request, session, "usage.view", { count: entries.length });
       sendJson(response, 200, { entries });
+      return;
+    }
+
+    if (url.pathname === "/api/custom-notifications") {
+      await ensureLoggedIn(session);
+      if (request.method === "POST") {
+        assertUsageAdmin(session);
+        const rules = await saveNotificationRules(await readJsonBody(request));
+        await trackUsage(request, session, "custom-notifications.update", { count: rules.length });
+        sendJson(response, 200, { rules });
+        return;
+      }
+      const rules = await readNotificationRules();
+      if ((session.account?.username || "").toLowerCase() === USAGE_ADMIN_EMAIL) {
+        sendJson(response, 200, { rules });
+      } else {
+        sendJson(response, 200, { notification: matchingNotification(session.account, rules) });
+      }
       return;
     }
 
