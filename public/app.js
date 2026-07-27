@@ -1155,6 +1155,8 @@ rowenaEditorForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({ rules })
     });
     rowenaEditorStatus.textContent = "All custom notifications saved.";
+    state.rowenaNotificationKey = null;
+    await showRowenaNotification();
   } catch (error) {
     rowenaEditorStatus.textContent = error.message;
   } finally {
