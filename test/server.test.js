@@ -15,6 +15,7 @@ const {
   mapWithConcurrency,
   menuPageOffersDate,
   mergeMenuDays,
+  normalizeLoginLogEntry,
   runIdempotentOperation,
   splitStall,
   usageUser
@@ -28,6 +29,22 @@ test("usage logs prefer the cafeteria display name", () => {
   assert.equal(usageUser({
     account: { username: "fallback@shimano.com.sg" }
   }), "fallback@shimano.com.sg");
+});
+
+test("usage logs retain successful logins only", () => {
+  assert.deepEqual(normalizeLoginLogEntry({
+    at: "2026-08-02T10:00:00.000Z",
+    action: "login.success",
+    user: "Rowena Tan",
+    balance: "$42.00",
+    session: "legacy"
+  }), {
+    at: "2026-08-02T10:00:00.000Z",
+    user: "Rowena Tan",
+    balance: "$42.00"
+  });
+  assert.equal(normalizeLoginLogEntry({ action: "wallet.view", user: "Rowena Tan" }), null);
+  assert.equal(normalizeLoginLogEntry({ action: "orders.view", user: "Rowena Tan" }), null);
 });
 
 test("account parsing prioritizes the Hello display name", () => {

@@ -254,6 +254,17 @@ async function trackUsage(request, session, action, details = {}) {
   }
 }
 
+function normalizeLoginLogEntry(entry) {
+  const isLegacyLogin = entry?.action === "login.success";
+  const isCurrentLogin = !entry?.action && entry?.user && entry?.balance;
+  if (!isLegacyLogin && !isCurrentLogin) return null;
+  return {
+    at: entry.at,
+    user: entry.user,
+    balance: entry.balance || "-"
+  };
+}
+
 async function readUsageLog(limit = 100) {
   try {
     const files = (await readdir(DATA_DIR, { withFileTypes: true }))
@@ -262,20 +273,24 @@ async function readUsageLog(limit = 100) {
       .sort().reverse();
     const entries = [];
     for (const file of files) {
-      const body = await readFile(path.join(DATA_DIR, file), "utf8");
-      for (const line of body.trim().split("\n").filter(Boolean).reverse()) {
+      const filePath = path.join(DATA_DIR, file);
+      const body = await readFile(filePath, "utf8");
+      const loginEntries = [];
+      for (const line of body.trim().split("\n").filter(Boolean)) {
         try {
-          const entry = JSON.parse(line);
-          if (entry.action === "login.success" || (!entry.action && entry.user && entry.balance)) {
-            entries.push({ at: entry.at, user: entry.user, balance: entry.balance || "-" });
-          }
+          const entry = normalizeLoginLogEntry(JSON.parse(line));
+          if (entry) loginEntries.push(entry);
         } catch {
-          // Ignore one malformed record instead of hiding the entire usage log.
+          // Malformed and unrelated records are removed during cleanup.
         }
-        if (entries.length >= limit) return entries;
       }
+      const cleanedBody = loginEntries.length
+        ? `${loginEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`
+        : "";
+      if (body !== cleanedBody) await writeFile(filePath, cleanedBody);
+      entries.push(...loginEntries.reverse());
     }
-    return entries;
+    return entries.slice(0, limit);
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -1350,8 +1365,9 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-function startServer() {
+async function startServer() {
   if (server.listening) return Promise.resolve(server);
+  await readUsageLog(0);
   return new Promise((resolve, reject) => {
     const onError = (error) => {
       server.off("listening", onListening);
@@ -1393,6 +1409,7 @@ module.exports = {
   runIdempotentOperation,
   server,
   splitStall,
+  normalizeLoginLogEntry,
   usageUser,
   startServer
 };
