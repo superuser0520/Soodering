@@ -301,7 +301,8 @@ function formatDate(date) {
 }
 
 function formatMoney(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
+  const amount = Number(value || 0);
+  return `${amount < 0 ? "-" : ""}$${Math.abs(amount).toFixed(2)}`;
 }
 
 function canViewUsage() {
@@ -563,29 +564,13 @@ function renderTodayOrders(orders) {
   }).join("") || `<p class="empty-state">You have no cafeteria order for today.</p>`;
 }
 
-function describeUsage(entry) {
-  const parts = [entry.action];
-  if (entry.user) parts.push(entry.user);
-  if (entry.balance) parts.push(`balance ${entry.balance}`);
-  if (entry.days) parts.push(`${entry.days} menu days`);
-  if (entry.products) parts.push(`${entry.products} products`);
-  if (entry.count !== undefined) parts.push(`${entry.count} records`);
-  if (entry.requested !== undefined) parts.push(`${entry.requested} requested`);
-  if (entry.placed !== undefined) parts.push(`${entry.placed} placed`);
-  if (entry.items !== undefined) parts.push(`${entry.items} item${entry.items === 1 ? "" : "s"}`);
-  if (entry.total) parts.push(`total ${entry.total}`);
-  if (entry.status) parts.push(`status ${entry.status}`);
-  if (entry.message) parts.push(entry.message);
-  return parts.join(" · ");
-}
-
 function renderUsage(entries) {
-  usageStatus.textContent = `${entries.length} recent log entr${entries.length === 1 ? "y" : "ies"}.`;
+  usageStatus.textContent = `${entries.length} recent login${entries.length === 1 ? "" : "s"}.`;
   usageList.innerHTML = entries.map((entry) => `
     <div class="usage-row">
       <div>
-        <strong>${escapeHtml(entry.action)}</strong>
-        <p class="meta">${escapeHtml(describeUsage(entry))}</p>
+        <strong>${escapeHtml(entry.user || "Unknown user")}</strong>
+        <p class="meta">Wallet balance: ${escapeHtml(entry.balance || "-")}</p>
       </div>
       <time>${escapeHtml(formatDateTime(entry.at))}</time>
     </div>
@@ -848,7 +833,7 @@ function renderCredit() {
   const cycleOrders = state.upcomingOrders.filter((order) => order.deliveryDate >= cycle.start && order.deliveryDate <= cycle.end && isActiveOrder(order));
   const upcomingSpend = cycleOrders.reduce((sum, order) => sum + parseMoneyValue(order.total), 0);
   const wallet = parseMoneyValue(state.walletBalance);
-  const projected = Math.max(0, wallet - upcomingSpend);
+  const projected = wallet - upcomingSpend;
 
   creditPanel.hidden = false;
   creditDaily.textContent = `${formatMoney(cycle.dailyCredit)} / workday`;

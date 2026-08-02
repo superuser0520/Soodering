@@ -206,12 +206,6 @@ function getRequestSession(request, response, { touch = true } = {}) {
   return session;
 }
 
-function shortSessionId(request) {
-  const cookies = parseCookies(request.headers.cookie || "");
-  const id = cookies[SESSION_COOKIE] || "";
-  return id ? id.slice(0, 8) : "new";
-}
-
 function usageUser(session) {
   const displayName = String(session.account?.name || "").trim();
   if (displayName) return displayName;
@@ -240,14 +234,12 @@ async function rotateUsageLogIfNeeded(nextBytes) {
 }
 
 async function trackUsage(request, session, action, details = {}) {
+  if (action !== "login.success") return;
+
   const entry = {
     at: new Date().toISOString(),
-    action,
     user: usageUser(session),
-    session: shortSessionId(request),
-    method: request.method,
-    path: new URL(request.url, `http://${request.headers.host}`).pathname,
-    ...details
+    balance: String(details.balance || "-").trim()
   };
   try {
     const line = `${JSON.stringify(entry)}\n`;
@@ -273,7 +265,10 @@ async function readUsageLog(limit = 100) {
       const body = await readFile(path.join(DATA_DIR, file), "utf8");
       for (const line of body.trim().split("\n").filter(Boolean).reverse()) {
         try {
-          entries.push(JSON.parse(line));
+          const entry = JSON.parse(line);
+          if (entry.action === "login.success" || (!entry.action && entry.user && entry.balance)) {
+            entries.push({ at: entry.at, user: entry.user, balance: entry.balance || "-" });
+          }
         } catch {
           // Ignore one malformed record instead of hiding the entire usage log.
         }
@@ -1188,7 +1183,8 @@ const server = http.createServer(async (request, response) => {
       const { username, password } = await readJsonBody(request);
       if (!username || !password) throw new Error("Username and password are required.");
       const account = await loginToSite(session, username, password);
-      await trackUsage(request, session, "login.success");
+      const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
+      await trackUsage(request, session, "login.success", { balance: wallet.balance });
       sendJson(response, 200, { account: serializeAccount(session) });
       return;
     }
