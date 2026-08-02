@@ -6,7 +6,7 @@
     <title>SooDering</title>
     <link rel="icon" href="/soodering-icon.png" type="image/png">
     <link rel="apple-touch-icon" href="/soodering-icon.png">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=20">
   </head>
   <body>
     <main class="app-shell">
@@ -27,8 +27,9 @@
           </label>
           <label class="remember-row" for="rememberInput">
             <input id="rememberInput" name="remember" type="checkbox">
-            <span>Remember my login on this device</span>
+            <span>Remember my login</span>
           </label>
+          <p id="rememberHelp" class="meta remember-help"></p>
           <button id="loginButton" type="submit">
             <span class="icon" aria-hidden="true">↗</span>
             <span>Login</span>
@@ -37,6 +38,7 @@
       </section>
 
       <section id="appScreen" class="app-screen" hidden>
+        <aside class="desktop-sidebar">
         <header class="topbar">
           <div>
             <p class="eyebrow">Cafeteria Helper</p>
@@ -84,6 +86,16 @@
             </div>
           </div>
         </section>
+        </aside>
+
+        <section class="workspace">
+          <header class="workspace-header">
+            <div>
+              <p class="eyebrow">Lunch workspace</p>
+              <h2 id="workspaceTitle">Menu</h2>
+              <p id="workspaceSubtitle" class="meta">Choose meals across upcoming dates.</p>
+            </div>
+          </header>
 
         <section id="ordersView" class="tab-panel" hidden>
           <section class="panel orders-panel">
@@ -98,6 +110,21 @@
         </section>
 
         <section id="usageView" class="tab-panel" hidden>
+          <section class="panel notification-editor-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Custom user notifications</h2>
+                <p id="rowenaEditorStatus" class="meta">Show a different message when a username contains the entered text.</p>
+              </div>
+            </div>
+            <form id="rowenaEditorForm" class="notification-editor-form">
+              <div id="notificationRules"></div>
+              <div class="notification-editor-actions">
+                <button id="addNotificationRuleButton" class="secondary" type="button">Add user message</button>
+                <button id="saveRowenaMessageButton" type="submit">Save all messages</button>
+              </div>
+            </form>
+          </section>
           <section class="panel usage-panel">
             <div class="panel-heading">
               <div>
@@ -111,6 +138,21 @@
         </section>
 
         <section id="menuView" class="tab-panel">
+        <section class="panel today-orders-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Today at a glance</p>
+              <h2>Your order today</h2>
+              <p id="todayOrdersStatus" class="meta">Loading your cafeteria order...</p>
+            </div>
+            <div class="today-orders-actions">
+              <strong id="todayOrdersCount" class="today-orders-count">0 meals</strong>
+              <button id="todayOrdersRefreshButton" class="secondary" type="button">Refresh</button>
+            </div>
+          </div>
+          <div id="todayOrdersList" class="today-orders-list" aria-live="polite"></div>
+        </section>
+
         <section class="panel basket-panel">
           <div class="panel-heading">
             <div>
@@ -141,9 +183,27 @@
         </section>
         <section id="menus" class="menus" aria-live="polite"></section>
         </section>
+        </section>
       </section>
     </main>
 
-    <script src="/app.js?v=16"></script>
+    <aside id="rowenaNotification" class="easter-egg-notification" role="alert" aria-live="assertive" hidden>
+      <div>
+        <span class="notification-badge" aria-hidden="true">!</span>
+        <strong id="rowenaNotificationTitle">Lunch reminder</strong>
+        <p id="rowenaNotificationMessage">Dont eat so much yoghurt, eat proper food</p>
+      </div>
+      <button id="dismissRowenaNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
+    </aside>
+
+    <aside id="systemNotification" class="system-notification" role="alert" aria-live="assertive" data-tone="error" hidden>
+      <div>
+        <strong id="systemNotificationTitle">Login unsuccessful</strong>
+        <p id="systemNotificationMessage"></p>
+      </div>
+      <button id="dismissSystemNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
+    </aside>
+
+    <script src="/app.js?v=24"></script>
   </body>
 </html>

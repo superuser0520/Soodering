@@ -7,17 +7,19 @@
   "scripts": {
     "start": "node server.js",
     "electron": "electron .",
-    "build:mac": "electron-packager . SooDering --platform=darwin --arch=arm64 --out=dist --overwrite --prune=true --ignore=\"^/ios($|/)\" --ignore=\"^/dist($|/)\"",
-    "build:win": "electron-packager . SooDering --platform=win32 --arch=x64 --out=dist --overwrite --prune=true --ignore=\"^/ios($|/)\" --ignore=\"^/dist($|/)\"",
+    "check": "node --check server.js && node --check electron-main.js && node --check preload.js && node --check public/app.js",
+    "test": "node --test",
+    "ci": "npm run check && npm test",
+    "build:mac": "electron-builder --mac dir --arm64",
+    "build:win": "electron-builder --win dir --x64",
     "build:portable": "electron-builder --win portable --x64"
   },
   "engines": {
     "node": ">=24.0.0 <25.0.0"
   },
   "devDependencies": {
-    "electron": "^37.0.0",
-    "electron-builder": "^26.15.3",
-    "electron-packager": "^17.1.2"
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.soodering.app",
@@ -27,7 +29,9 @@
     },
     "files": [
       "electron-main.js",
+      "preload.js",
       "server.js",
+      "config.js",
       "package.json",
       "public/**/*"
     ],
