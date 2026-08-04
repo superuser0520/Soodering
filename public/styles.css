@@ -762,11 +762,12 @@ button.is-loading::after {
 .easter-egg-notification {
   align-items: center;
   animation: notification-center-pop 300ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
-  background: linear-gradient(135deg, #fff3a6, #ffc83d);
-  border: 4px solid #8f4f00;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 24px;
   bottom: auto;
-  box-shadow: 0 30px 90px rgba(55, 30, 0, 0.48), 0 0 0 8px rgba(255, 210, 70, 0.25);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.58), 0 0 0 6px rgba(255, 255, 255, 0.08);
+  color: #fff;
   font-size: 20px;
   left: 50%;
   max-width: min(620px, calc(100vw - 32px));
@@ -785,9 +786,9 @@ button.is-loading::after {
 
 .easter-egg-notification .notification-badge {
   align-items: center;
-  background: #9b2c00;
+  background: #fff;
   border-radius: 50%;
-  color: white;
+  color: #000;
   display: flex;
   font-size: 22px;
   font-weight: 800;
@@ -798,13 +799,14 @@ button.is-loading::after {
 }
 
 .easter-egg-notification strong {
-  color: #6d3500;
+  color: #fff;
   font-size: 26px;
   line-height: 1.15;
+  letter-spacing: -0.02em;
 }
 
 .easter-egg-notification p {
-  color: #392000;
+  color: rgba(255, 255, 255, 0.82);
   font-size: 20px;
   font-weight: 600;
 }
@@ -855,7 +857,18 @@ button.is-loading::after {
 }
 
 .easter-egg-notification strong {
-  color: #8a5800;
+  color: #fff;
+}
+
+.easter-egg-notification button.secondary {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.easter-egg-notification button.secondary:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.34);
 }
 
 .easter-egg-notification p,
