@@ -91,6 +91,7 @@ const systemNotificationMessage = document.querySelector("#systemNotificationMes
 const dismissSystemNotification = document.querySelector("#dismissSystemNotification");
 let rowenaNotificationTimer = null;
 let systemNotificationTimer = null;
+let rowenaDismissAttempts = 0;
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, (char) => ({
@@ -444,6 +445,41 @@ function afterFirstPaint(callback) {
 function hideRowenaNotification() {
   clearTimeout(rowenaNotificationTimer);
   rowenaNotification.hidden = true;
+  rowenaDismissAttempts = 0;
+  rowenaNotification.style.left = "50%";
+  rowenaNotification.style.top = "50%";
+  rowenaNotification.classList.remove("is-hopping");
+  dismissRowenaNotification.setAttribute("aria-label", "Dismiss notification");
+}
+
+function attemptRowenaNotificationDismiss(event) {
+  if (event.detail === 0) {
+    hideRowenaNotification();
+    return;
+  }
+
+  rowenaDismissAttempts += 1;
+  if (rowenaDismissAttempts >= 3) {
+    hideRowenaNotification();
+    return;
+  }
+
+  const bounds = rowenaNotification.getBoundingClientRect();
+  const inset = 14;
+  const minX = bounds.width / 2 + inset;
+  const maxX = Math.max(minX, window.innerWidth - bounds.width / 2 - inset);
+  const minY = bounds.height / 2 + inset;
+  const maxY = Math.max(minY, window.innerHeight - bounds.height / 2 - inset);
+  const targets = [[maxX, minY], [minX, maxY]];
+  const [left, top] = targets[rowenaDismissAttempts - 1];
+  rowenaNotification.style.left = `${left}px`;
+  rowenaNotification.style.top = `${top}px`;
+  rowenaNotification.classList.remove("is-hopping");
+  void rowenaNotification.offsetWidth;
+  rowenaNotification.classList.add("is-hopping");
+  dismissRowenaNotification.setAttribute("aria-label", `Dismiss notification, attempt ${rowenaDismissAttempts + 1} of 3`);
+  clearTimeout(rowenaNotificationTimer);
+  rowenaNotificationTimer = setTimeout(hideRowenaNotification, 15000);
 }
 
 async function showRowenaNotification() {
@@ -459,6 +495,9 @@ async function showRowenaNotification() {
     return;
   }
   state.rowenaNotificationKey = accountKey;
+  rowenaDismissAttempts = 0;
+  rowenaNotification.style.left = "50%";
+  rowenaNotification.style.top = "50%";
   rowenaNotification.hidden = false;
   clearTimeout(rowenaNotificationTimer);
   rowenaNotificationTimer = setTimeout(hideRowenaNotification, 15000);
@@ -1168,7 +1207,7 @@ notificationRules.addEventListener("click", (event) => {
   if (button) button.closest(".notification-rule").remove();
 });
 todayOrdersRefreshButton.addEventListener("click", () => loadOrders({ force: true }));
-dismissRowenaNotification.addEventListener("click", hideRowenaNotification);
+dismissRowenaNotification.addEventListener("click", attemptRowenaNotificationDismiss);
 dismissSystemNotification.addEventListener("click", hideSystemNotification);
 
 ordersList.addEventListener("click", async (event) => {

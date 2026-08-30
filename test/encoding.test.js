@@ -21,6 +21,8 @@ test("Rowena login Easter egg is case-insensitive and keeps the requested copy",
   assert.match(app, /\/api\/session/);
   assert.match(app, /if \(!data\.notification\) return/);
   assert.match(html, /Dont eat so much yoghurt, eat proper food/);
+  assert.match(app, /rowenaDismissAttempts >= 3/);
+  assert.match(app, /attemptRowenaNotificationDismiss/);
 });
 
 test("login failures and native password storage have visible handling", async () => {
