@@ -25,6 +25,8 @@ const SESSION_MAX_AGE_MS = config.sessionCookieMaxAgeMs;
 const SESSION_IDLE_TIMEOUT_MS = config.sessionIdleTimeoutMs;
 const USAGE_ADMIN_EMAIL = config.usageAdminEmail;
 const sessions = new Map();
+const orderJobs = new Map();
+const orderJobKeys = new Map();
 let menuLoadPromise = null;
 let usageWriteChain = Promise.resolve();
 
@@ -711,6 +713,138 @@ async function placeBulkOrder(session, { selections = [], timeSlot = "", notes =
   }
 }
 
+function publicOrderJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    createdAt: job.createdAt,
+    finishedAt: job.finishedAt || "",
+    items: job.items,
+    placed: job.placed,
+    failed: job.failed,
+    error: job.error || ""
+  };
+}
+
+function assertOrderJobOwner(session, job) {
+  assertLoggedIn(session);
+  if (!job || job.username.toLowerCase() !== String(session.account?.username || "").toLowerCase()) {
+    const error = new Error("Order job was not found.");
+    error.status = 404;
+    throw error;
+  }
+}
+
+async function runOrderJob(job, credentials, { selections, timeSlot = "", notes = "" }) {
+  const workerSession = createSiteSession();
+  job.status = "running";
+  try {
+    await loginToSite(workerSession, credentials.username, credentials.password);
+    for (const [index, selection] of selections.entries()) {
+      const item = job.items[index];
+      item.status = "ordering";
+      item.message = "Submitting now...";
+      try {
+        await clearCart(workerSession);
+        await addToCart(workerSession, {
+          productId: selection.productId,
+          date: selection.date,
+          quantity: selection.quantity || 1
+        });
+        const placed = await placeOrder(workerSession, { timeSlot, notes });
+        item.status = "done";
+        item.message = "Ordered";
+        job.placed.push({
+          date: selection.date,
+          productId: selection.productId,
+          result: placed.result,
+          redirect: placed.redirect
+        });
+      } catch (error) {
+        item.status = "failed";
+        item.message = error.message || "Order failed.";
+        job.failed.push({
+          date: selection.date,
+          productId: selection.productId,
+          error: item.message
+        });
+      }
+    }
+    job.status = job.failed.length ? (job.placed.length ? "partial" : "failed") : "completed";
+  } catch (error) {
+    job.status = "failed";
+    job.error = error.message || "Order queue failed.";
+    job.items.filter((item) => item.status === "pending").forEach((item) => {
+      item.status = "failed";
+      item.message = job.error;
+      job.failed.push({
+        date: item.date,
+        productId: item.productId,
+        error: item.message
+      });
+    });
+  } finally {
+    try {
+      await clearCart(workerSession);
+    } catch {
+      // The dedicated queue session is discarded after the job.
+    }
+    workerSession.reset();
+    job.finishedAt = new Date().toISOString();
+    setTimeout(() => {
+      orderJobs.delete(job.id);
+      orderJobKeys.delete(job.key);
+    }, 24 * 60 * 60 * 1000).unref?.();
+  }
+}
+
+function createOrderJob(session, body) {
+  const selections = body.selections;
+  if (!Array.isArray(selections) || selections.length === 0) {
+    throw new Error("Please select at least one meal.");
+  }
+  if (selections.length > 20) throw new Error("A maximum of 20 meals can be ordered at once.");
+  for (const selection of selections) {
+    if (!selection.productId || !/^\d{4}-\d{2}-\d{2}$/.test(selection.date || "")) {
+      throw new Error("Every selection requires a valid product and delivery date.");
+    }
+  }
+  const idempotencyKey = String(body.idempotencyKey || "");
+  if (!/^[a-zA-Z0-9_-]{16,100}$/.test(idempotencyKey)) {
+    const error = new Error("A valid order operation ID is required.");
+    error.status = 400;
+    throw error;
+  }
+  const credentials = session.credentials;
+  if (!credentials?.username || !credentials?.password) {
+    throw new Error("Please log in again before starting the order queue.");
+  }
+
+  const key = `${credentials.username.toLowerCase()}|${idempotencyKey}`;
+  const existingId = orderJobKeys.get(key);
+  if (existingId && orderJobs.has(existingId)) return orderJobs.get(existingId);
+
+  const job = {
+    id: crypto.randomUUID(),
+    key,
+    username: session.account.username,
+    status: "queued",
+    createdAt: new Date().toISOString(),
+    items: selections.map((selection) => ({
+      date: selection.date,
+      productId: selection.productId,
+      status: "pending",
+      message: "Waiting"
+    })),
+    placed: [],
+    failed: []
+  };
+  orderJobs.set(job.id, job);
+  orderJobKeys.set(key, job.id);
+  void runOrderJob(job, { ...credentials }, body);
+  return job;
+}
+
 async function runIdempotentOperation(operations, key, operation) {
   if (operations.has(key)) return operations.get(key);
   const pending = Promise.resolve().then(operation);
@@ -1303,6 +1437,21 @@ const server = http.createServer(async (request, response) => {
         placed: result.placed.length
       });
       sendJson(response, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/api/order/queue" && request.method === "POST") {
+      await ensureLoggedIn(session);
+      const job = createOrderJob(session, await readJsonBody(request));
+      sendJson(response, 202, { job: publicOrderJob(job) });
+      return;
+    }
+
+    if (url.pathname === "/api/order/job" && request.method === "GET") {
+      await ensureLoggedIn(session);
+      const job = orderJobs.get(url.searchParams.get("id") || "");
+      assertOrderJobOwner(session, job);
+      sendJson(response, 200, { job: publicOrderJob(job) });
       return;
     }
 

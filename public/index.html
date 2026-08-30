@@ -6,7 +6,7 @@
     <title>SooDering</title>
     <link rel="icon" href="/soodering-icon.png" type="image/png">
     <link rel="apple-touch-icon" href="/soodering-icon.png">
-    <link rel="stylesheet" href="/styles.css?v=21">
+    <link rel="stylesheet" href="/styles.css?v=23">
   </head>
   <body>
     <main class="app-shell">
@@ -168,6 +168,10 @@
           </div>
           <div id="orderProgress" class="order-progress" hidden></div>
           <div class="checkout-panel">
+            <p class="background-order-note">
+              <span aria-hidden="true">↻</span>
+              <span><strong>Improved background ordering:</strong> Once your selected dates are accepted, SooDering continues ordering in the background. You can close this browser and check Upcoming orders later.</span>
+            </p>
             <button id="placeOrderButton" type="button">
               <span class="icon" aria-hidden="true">✅</span>
               <span>Place order</span>
@@ -204,6 +208,6 @@
       <button id="dismissSystemNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
     </aside>
 
-    <script src="/app.js?v=24"></script>
+    <script src="/app.js?v=28"></script>
   </body>
 </html>

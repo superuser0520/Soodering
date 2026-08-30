@@ -43,3 +43,15 @@ test("homepage includes the signed-in user's today-order quick view", async () =
   assert.match(renderer, /Signed-in account only/);
   assert.match(renderer, /orders\.map/);
 });
+
+test("wallet forecast uses the 27th-to-26th cycle and highest order per date", async () => {
+  const app = await readFile("public/app.js", "utf8");
+  const cycle = app.match(/function creditCycle\([\s\S]*?\n\}/)?.[0] || "";
+  const spending = app.match(/function highestOrderSpendPerDate\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(cycle, /start\.setDate\(27\)/);
+  assert.match(cycle, /addDays\(refresh, -1\)/);
+  assert.match(spending, /new Map\(\)/);
+  assert.match(spending, /Math\.max/);
+  assert.match(spending, /order\.deliveryDate < cycle\.start/);
+  assert.match(spending, /order\.deliveryDate > cycle\.end/);
+});
