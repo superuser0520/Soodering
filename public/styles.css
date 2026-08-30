@@ -433,6 +433,26 @@ h3 { font-size: 16px; line-height: 1.2; }
   padding-top: 14px;
 }
 
+.background-order-note {
+  align-items: flex-start;
+  background: #f0fdf4;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 14px;
+  color: #14532d;
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  line-height: 1.45;
+  margin-bottom: 12px;
+  padding: 11px 12px;
+}
+
+.background-order-note > span:first-child {
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 1;
+}
+
 .quick-order-actions {
   display: grid;
   gap: 8px;
@@ -902,6 +922,45 @@ button.is-loading::after {
 
 .system-notification[data-tone="warning"] strong {
   color: #8a5800;
+}
+
+.system-notification[data-tone="success"] {
+  align-items: center;
+  background: #050806;
+  border: 1px solid rgba(74, 222, 128, 0.55);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.42), 0 0 0 5px rgba(34, 197, 94, 0.12);
+  color: #fff;
+  max-width: min(460px, calc(100vw - 28px));
+  padding: 18px;
+}
+
+.system-notification[data-tone="success"]::before {
+  align-items: center;
+  background: #22c55e;
+  border-radius: 50%;
+  color: #041308;
+  content: "✓";
+  display: flex;
+  flex: 0 0 42px;
+  font-size: 24px;
+  font-weight: 900;
+  height: 42px;
+  justify-content: center;
+}
+
+.system-notification[data-tone="success"] strong {
+  color: #fff;
+  font-size: 18px;
+}
+
+.system-notification[data-tone="success"] p {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.system-notification[data-tone="success"] button.secondary {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #fff;
 }
 
 @keyframes notification-pop {

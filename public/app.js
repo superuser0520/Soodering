@@ -402,6 +402,16 @@ function isActiveOrder(order) {
   return !/cancel/i.test(order.status || "") && order.deliveryDate && order.deliveryDate >= todayIso();
 }
 
+function highestOrderSpendPerDate(orders, cycle) {
+  const highestByDate = new Map();
+  orders.forEach((order) => {
+    if (!isActiveOrder(order) || order.deliveryDate < cycle.start || order.deliveryDate > cycle.end) return;
+    const amount = parseMoneyValue(order.total);
+    highestByDate.set(order.deliveryDate, Math.max(highestByDate.get(order.deliveryDate) || 0, amount));
+  });
+  return [...highestByDate.values()].reduce((sum, amount) => sum + amount, 0);
+}
+
 function ordersForProduct(product) {
   const productNeedle = normalizeMealName(`${product.title} ${product.item}`);
   return state.upcomingOrders.filter((order) => {
@@ -652,7 +662,7 @@ function renderOrderProgress(items, { active = false } = {}) {
 
   orderProgress.hidden = false;
   orderProgress.innerHTML = `
-    <p class="order-reminder">${active ? "Please do not close this page. SooDering is ordering day by day." : "Ordering progress"}</p>
+    <p class="order-reminder">${active ? "The server is ordering day by day. You may close this browser." : "Ordering progress"}</p>
     <div class="order-progress-list">
       ${items.map((item) => `
         <div class="order-progress-row ${escapeHtml(item.status)}">
@@ -712,56 +722,61 @@ function orderOperationKey(item) {
 
 async function submitProducts(products, successMessage) {
   const progressItems = progressItemsFor(products);
-  let latestOrders = null;
-  let successCount = 0;
-  let failureCount = 0;
-
+  progressItems.forEach((item) => {
+    item.status = "pending";
+    item.label = "Queued";
+    item.message = "The server will continue if this browser closes.";
+  });
   renderOrderProgress(progressItems, { active: true });
+  cartStatus.textContent = `Sending ${products.length} date${products.length === 1 ? "" : "s"} to the server queue...`;
 
-  for (const [index, item] of products.entries()) {
-    progressItems[index].status = "ordering";
-    progressItems[index].label = "Ordering";
-    progressItems[index].message = "Submitting now...";
-    cartStatus.textContent = `Ordering ${index + 1} of ${products.length}: ${formatDate(item.date)}. Do not close this page.`;
+  const response = await apiWithRelogin("/api/order/queue", {
+    method: "POST",
+    body: JSON.stringify({
+      selections: products.map((item) => ({ productId: item.id, date: item.date, quantity: 1 })),
+      timeSlot: state.config.defaultTimeSlots[0],
+      notes: "",
+      idempotencyKey: `queue_${orderOperationKey(products[0])}_${products.length}`
+    })
+  });
+  const jobId = response.job.id;
+  localStorage.setItem("sooderingActiveOrderJob", jobId);
+  const acceptedMessage = `Orders for ${products.length} selected date${products.length === 1 ? "" : "s"} are accepted. You can close this browser.`;
+  cartStatus.textContent = acceptedMessage;
+  showSystemNotification("Orders accepted", acceptedMessage, { tone: "success", timeout: 30000 });
+
+  let job = response.job;
+  while (["queued", "running"].includes(job.status)) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    job = (await apiWithRelogin(`/api/order/job?id=${encodeURIComponent(jobId)}`, { headers: {} })).job;
+    const jobItems = new Map(job.items.map((item) => [`${item.date}|${item.productId}`, item]));
+    progressItems.forEach((item) => {
+      const queued = jobItems.get(`${item.date}|${item.id}`);
+      if (!queued) return;
+      item.status = queued.status;
+      item.label = queued.status === "done" ? "Ordered" : queued.status === "ordering" ? "Ordering" : queued.status === "failed" ? "Failed" : "Queued";
+      item.message = queued.message;
+    });
     renderOrderProgress(progressItems, { active: true });
-
-    try {
-      const result = await apiWithRelogin("/api/order/bulk", {
-        method: "POST",
-        body: JSON.stringify({
-          selections: [{
-            productId: item.id,
-            date: item.date,
-            quantity: 1
-          }],
-          timeSlot: state.config.defaultTimeSlots[0],
-          notes: "",
-          idempotencyKey: orderOperationKey(item)
-        })
-      });
-      latestOrders = result.orders;
-      successCount += 1;
-      progressItems[index].status = "done";
-      progressItems[index].label = "Ordered";
-      progressItems[index].message = "Done";
-      state.selections.delete(item.date);
-      state.orderKeys.delete(`${item.date}|${item.id}`);
-    } catch (error) {
-      failureCount += 1;
-      progressItems[index].status = "failed";
-      progressItems[index].label = "Failed";
-      progressItems[index].message = error.message || "Order failed.";
-    }
-
-    renderOrderProgress(progressItems, { active: index < products.length - 1 });
   }
+
+  localStorage.removeItem("sooderingActiveOrderJob");
+  const placedKeys = new Set(job.placed.map((item) => `${item.date}|${item.productId}`));
+  progressItems.forEach((item) => {
+    const key = `${item.date}|${item.id}`;
+    if (placedKeys.has(key)) {
+      state.selections.delete(item.date);
+      state.orderKeys.delete(key);
+    }
+  });
+  const successCount = job.placed.length;
+  const failureCount = job.failed.length;
 
   cartStatus.textContent = failureCount
     ? `${successCount} ordered, ${failureCount} failed. Check the progress list.`
     : successMessage;
   renderBasket();
   renderOrderProgress(progressItems);
-  if (latestOrders) renderOrders({ orders: latestOrders });
   await refreshAccountData({ includeOrders: true, forceOrders: true });
 }
 
@@ -830,14 +845,13 @@ function renderCredit() {
   }
 
   const cycle = creditCycle();
-  const cycleOrders = state.upcomingOrders.filter((order) => order.deliveryDate >= cycle.start && order.deliveryDate <= cycle.end && isActiveOrder(order));
-  const upcomingSpend = cycleOrders.reduce((sum, order) => sum + parseMoneyValue(order.total), 0);
+  const upcomingSpend = highestOrderSpendPerDate(state.upcomingOrders, cycle);
   const wallet = parseMoneyValue(state.walletBalance);
   const projected = wallet - upcomingSpend;
 
   creditPanel.hidden = false;
   creditDaily.textContent = `${formatMoney(cycle.dailyCredit)} / workday`;
-  creditDetails.textContent = `${formatDate(cycle.start)} to ${formatDate(cycle.end)} has ${cycle.workingDays} credited workdays.`;
+  creditDetails.textContent = `${formatDate(cycle.start)} to ${formatDate(cycle.end)} has ${cycle.workingDays} credited workdays. One payment per date; duplicates use the highest total.`;
   creditRefresh.textContent = `${cycle.calendarDaysLeft} day${cycle.calendarDaysLeft === 1 ? "" : "s"}`;
   creditUpcoming.textContent = formatMoney(upcomingSpend);
   creditProjected.textContent = formatMoney(projected);
@@ -1181,6 +1195,8 @@ ordersList.addEventListener("click", async (event) => {
 menusEl.addEventListener("click", (event) => {
   const button = event.target.closest(".pick-button");
   if (!button || !state.data) return;
+  const anchor = button.closest(".menu-item");
+  const anchorTop = anchor?.getBoundingClientRect().top;
 
   const product = allProducts(state.data.days).find((item) => item.id === button.dataset.productId && item.date === button.dataset.date);
   if (!product) return;
@@ -1192,6 +1208,12 @@ menusEl.addEventListener("click", (event) => {
     state.selections.set(product.date, product);
   }
   renderBasket();
+  if (anchor && Number.isFinite(anchorTop)) {
+    requestAnimationFrame(() => {
+      const movedBy = anchor.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(movedBy) > 1) window.scrollBy(0, movedBy);
+    });
+  }
 });
 
 cartList.addEventListener("click", (event) => {
