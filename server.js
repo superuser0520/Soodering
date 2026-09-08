@@ -445,7 +445,7 @@ async function loginToSite(session, username, password) {
   });
   const html = await response.text();
 
-  if (/woocommerce-error|Login|Username or email address/i.test(html) && !/customer-logout|Account pages|Hello/i.test(html)) {
+  if (/woocommerce-error/i.test(html) && !/customer-logout|Account pages|Hello/i.test(html)) {
     throw new Error("Login failed. Please check the cafeteria username and password.");
   }
 
