@@ -56,4 +56,7 @@ test("wallet forecast uses the 27th-to-26th cycle and highest order per date", a
   assert.match(spending, /Math\.max/);
   assert.match(spending, /order\.deliveryDate < cycle\.start/);
   assert.match(spending, /order\.deliveryDate > cycle\.end/);
+  assert.match(app, /forecastOrderStartDate/);
+  assert.match(app, /13 \* 60 \+ 30/);
+  assert.match(app, /leaveDays \* cycle\.dailyCredit/);
 });

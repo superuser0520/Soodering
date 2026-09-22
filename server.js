@@ -24,6 +24,8 @@ const SESSION_COOKIE = "soodering_sid";
 const SESSION_MAX_AGE_MS = config.sessionCookieMaxAgeMs;
 const SESSION_IDLE_TIMEOUT_MS = config.sessionIdleTimeoutMs;
 const USAGE_ADMIN_EMAIL = config.usageAdminEmail;
+const WALLET_CACHE_MS = 30 * 1000;
+const ORDERS_CACHE_MS = 60 * 1000;
 const sessions = new Map();
 const orderJobs = new Map();
 const orderJobKeys = new Map();
@@ -165,6 +167,10 @@ function createSiteSession() {
   return {
     account: null,
     credentials: null,
+    walletCache: null,
+    walletCachedAt: 0,
+    ordersCache: null,
+    ordersCachedAt: 0,
     touchedAt: Date.now(),
     orderOperations: new Map(),
     cookies,
@@ -173,6 +179,10 @@ function createSiteSession() {
       cookies.clear();
       this.account = null;
       if (clearCredentials) this.credentials = null;
+      this.walletCache = null;
+      this.walletCachedAt = 0;
+      this.ordersCache = null;
+      this.ordersCachedAt = 0;
       this.touchedAt = Date.now();
       this.orderOperations.clear();
     }
@@ -904,6 +914,33 @@ async function loadOrders(session) {
   });
 }
 
+async function loadWalletCached(session, { force = false } = {}) {
+  if (!force && session.walletCache && Date.now() - session.walletCachedAt < WALLET_CACHE_MS) {
+    return session.walletCache;
+  }
+  const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
+  session.walletCache = wallet;
+  session.walletCachedAt = Date.now();
+  return wallet;
+}
+
+async function loadOrdersCached(session, { force = false } = {}) {
+  if (!force && session.ordersCache && Date.now() - session.ordersCachedAt < ORDERS_CACHE_MS) {
+    return session.ordersCache;
+  }
+  const orders = await loadOrders(session);
+  session.ordersCache = orders;
+  session.ordersCachedAt = Date.now();
+  return orders;
+}
+
+function invalidateAccountCaches(session) {
+  session.walletCache = null;
+  session.walletCachedAt = 0;
+  session.ordersCache = null;
+  session.ordersCachedAt = 0;
+}
+
 function parseDates(html) {
   const dates = [];
   const optionPattern = /<option\b[^>]*data-date=["']([^"']+)["'][^>]*>([\s\S]*?)<\/option>/gi;
@@ -1293,9 +1330,16 @@ async function serveStatic(request, response) {
 
   try {
     const body = await readFile(filePath);
+    const extension = path.extname(filePath);
+    const versionedAsset = url.searchParams.has("v") && [".css", ".js"].includes(extension);
+    const cacheControl = pathname === "/index.html"
+      ? "no-cache"
+      : versionedAsset
+        ? "public, max-age=31536000, immutable"
+        : "public, max-age=86400";
     response.writeHead(200, {
-      "content-type": contentTypes[path.extname(filePath)] || "application/octet-stream",
-      "cache-control": "no-store",
+      "content-type": contentTypes[extension] || "application/octet-stream",
+      "cache-control": cacheControl,
       "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://ssip-cafeteria.whew.life; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
       "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer"
@@ -1333,8 +1377,10 @@ const server = http.createServer(async (request, response) => {
       if (!username || !password) throw new Error("Username and password are required.");
       const account = await loginToSite(session, username, password);
       const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
+      session.walletCache = wallet;
+      session.walletCachedAt = Date.now();
       await trackUsage(request, session, "login.success", { balance: wallet.balance });
-      sendJson(response, 200, { account: serializeAccount(session) });
+      sendJson(response, 200, { account: serializeAccount(session), balance: wallet.balance });
       return;
     }
 
@@ -1369,14 +1415,14 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/wallet") {
       await ensureLoggedIn(session);
-      const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
+      const wallet = await loadWalletCached(session, { force: url.searchParams.get("refresh") === "1" });
       await trackUsage(request, session, "wallet.view", { balance: wallet.balance });
       sendJson(response, 200, { balance: wallet.balance });
       return;
     }
 
     if (url.pathname === "/api/orders") {
-      const orders = await loadOrders(session);
+      const orders = await loadOrdersCached(session, { force: url.searchParams.get("refresh") === "1" });
       await trackUsage(request, session, "orders.view", { count: orders.length });
       sendJson(response, 200, { orders });
       return;
@@ -1385,6 +1431,7 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/order/cancel" && request.method === "POST") {
       const { cancelUrl } = await readJsonBody(request);
       const result = await cancelOrder(session, cancelUrl);
+      invalidateAccountCaches(session);
       await trackUsage(request, session, "order.cancel", { orders: result.orders.length });
       sendJson(response, 200, result);
       return;
@@ -1423,6 +1470,7 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/order/place" && request.method === "POST") {
       const result = await placeOrder(session, await readJsonBody(request));
+      invalidateAccountCaches(session);
       await trackUsage(request, session, "order.place", { result: result.result });
       sendJson(response, 200, result);
       return;
@@ -1431,6 +1479,7 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/order/bulk" && request.method === "POST") {
       const body = await readJsonBody(request);
       const result = await placeIdempotentBulkOrder(session, body);
+      invalidateAccountCaches(session);
       await trackUsage(request, session, "order.bulk", {
         result: result.result,
         requested: Array.isArray(body.selections) ? body.selections.length : 0,
@@ -1442,6 +1491,7 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/order/queue" && request.method === "POST") {
       await ensureLoggedIn(session);
+      invalidateAccountCaches(session);
       const job = createOrderJob(session, await readJsonBody(request));
       sendJson(response, 202, { job: publicOrderJob(job) });
       return;

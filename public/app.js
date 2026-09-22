@@ -28,7 +28,9 @@ const state = {
   idleTimer: null,
   menuRefreshTimer: null,
   orderKeys: new Map(),
-  rowenaNotificationKey: null
+  rowenaNotificationKey: null,
+  leaveDays: 0,
+  leaveDaysAccountKey: null
 };
 
 const menusEl = document.querySelector("#menus");
@@ -52,6 +54,8 @@ const creditDetails = document.querySelector("#creditDetails");
 const creditRefresh = document.querySelector("#creditRefresh");
 const creditUpcoming = document.querySelector("#creditUpcoming");
 const creditProjected = document.querySelector("#creditProjected");
+const leaveDaysInput = document.querySelector("#leaveDaysInput");
+const leaveDaysDeduction = document.querySelector("#leaveDaysDeduction");
 const ordersList = document.querySelector("#ordersList");
 const ordersTabCount = document.querySelector("#ordersTabCount");
 const todayOrdersList = document.querySelector("#todayOrdersList");
@@ -252,6 +256,7 @@ async function loginWithRememberedCredentials() {
     })
   });
   state.account = data.account;
+  if (data.balance) renderWallet({ balance: data.balance });
   renderAccount();
   return true;
 }
@@ -290,6 +295,28 @@ function todayIso() {
   const mm = String(sg.getMonth() + 1).padStart(2, "0");
   const dd = String(sg.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function singaporeDateTime(now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Singapore",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    minutes: Number(parts.hour) * 60 + Number(parts.minute)
+  };
+}
+
+function forecastOrderStartDate(now = new Date()) {
+  const singapore = singaporeDateTime(now);
+  if (singapore.minutes < 13 * 60 + 30) return singapore.date;
+  return isoDate(addDays(new Date(`${singapore.date}T00:00:00`), 1));
 }
 
 function formatDate(date) {
@@ -403,10 +430,12 @@ function isActiveOrder(order) {
   return !/cancel/i.test(order.status || "") && order.deliveryDate && order.deliveryDate >= todayIso();
 }
 
-function highestOrderSpendPerDate(orders, cycle) {
+function highestOrderSpendPerDate(orders, cycle, now = new Date()) {
   const highestByDate = new Map();
+  const forecastStart = forecastOrderStartDate(now);
   orders.forEach((order) => {
-    if (!isActiveOrder(order) || order.deliveryDate < cycle.start || order.deliveryDate > cycle.end) return;
+    if (/cancel/i.test(order.status || "") || !order.deliveryDate) return;
+    if (order.deliveryDate < forecastStart || order.deliveryDate < cycle.start || order.deliveryDate > cycle.end) return;
     const amount = parseMoneyValue(order.total);
     highestByDate.set(order.deliveryDate, Math.max(highestByDate.get(order.deliveryDate) || 0, amount));
   });
@@ -524,6 +553,13 @@ function renderAccount() {
     loginButton.textContent = "Switch account";
     loginScreen.hidden = true;
     appScreen.hidden = false;
+    const accountKey = String(state.account.username || state.account.name || "account").toLowerCase();
+    if (state.leaveDaysAccountKey !== accountKey) {
+      state.leaveDaysAccountKey = accountKey;
+      state.leaveDays = Math.max(0, Math.floor(Number(localStorage.getItem(`soodering.leaveDays.${accountKey}`) || 0)));
+      leaveDaysInput.value = String(state.leaveDays);
+      renderCredit();
+    }
     showRowenaNotification();
   } else {
     accountStatus.textContent = "Sign in to order lunch.";
@@ -816,7 +852,7 @@ async function submitProducts(products, successMessage) {
     : successMessage;
   renderBasket();
   renderOrderProgress(progressItems);
-  await refreshAccountData({ includeOrders: true, forceOrders: true });
+  await refreshAccountData({ includeOrders: true, forceOrders: true, forceWallet: true });
 }
 
 async function quickOrder(stallName) {
@@ -885,15 +921,20 @@ function renderCredit() {
 
   const cycle = creditCycle();
   const upcomingSpend = highestOrderSpendPerDate(state.upcomingOrders, cycle);
+  const leaveDays = Math.min(cycle.workingDays, Math.max(0, Math.floor(Number(state.leaveDays) || 0)));
+  const leaveDeduction = leaveDays * cycle.dailyCredit;
   const wallet = parseMoneyValue(state.walletBalance);
-  const projected = wallet - upcomingSpend;
+  const projected = wallet - upcomingSpend - leaveDeduction;
 
   creditPanel.hidden = false;
   creditDaily.textContent = `${formatMoney(cycle.dailyCredit)} / workday`;
-  creditDetails.textContent = `${formatDate(cycle.start)} to ${formatDate(cycle.end)} has ${cycle.workingDays} credited workdays. One payment per date; duplicates use the highest total.`;
+  creditDetails.textContent = `${formatDate(cycle.start)} to ${formatDate(cycle.end)} has ${cycle.workingDays} credited workdays. One payment per date; duplicates use the highest total. Today's meal is excluded after 1:30 PM SGT.`;
   creditRefresh.textContent = `${cycle.calendarDaysLeft} day${cycle.calendarDaysLeft === 1 ? "" : "s"}`;
   creditUpcoming.textContent = formatMoney(upcomingSpend);
   creditProjected.textContent = formatMoney(projected);
+  leaveDaysInput.max = String(cycle.workingDays);
+  leaveDaysInput.value = String(leaveDays);
+  leaveDaysDeduction.textContent = leaveDays ? `${formatMoney(leaveDeduction)} estimated deduction` : "No leave deduction";
 }
 
 function renderMenus() {
@@ -948,12 +989,13 @@ async function loadMenus(refresh = false) {
   }
 }
 
-async function loadWallet() {
+async function loadWallet({ force = false } = {}) {
   if (!state.account) return;
   if (state.walletLoading) return;
+  if (state.walletBalance && !force) return;
   state.walletLoading = true;
   try {
-    const wallet = await api("/api/wallet", { headers: {} });
+    const wallet = await api(`/api/wallet${force ? "?refresh=1" : ""}`, { headers: {} });
     renderWallet(wallet);
   } catch (error) {
     walletBalance.textContent = "-";
@@ -974,7 +1016,7 @@ async function loadOrders({ force = false } = {}) {
   }
 
   try {
-    const orders = await api("/api/orders", { headers: {} });
+    const orders = await api(`/api/orders${force ? "?refresh=1" : ""}`, { headers: {} });
     state.ordersLoaded = true;
     renderOrders(orders);
   } catch (error) {
@@ -1008,10 +1050,10 @@ async function loadUsage({ force = false } = {}) {
   }
 }
 
-async function refreshAccountData({ includeOrders = false, forceOrders = false } = {}) {
+async function refreshAccountData({ includeOrders = false, forceOrders = false, forceWallet = false } = {}) {
   if (!state.account) return;
   await Promise.all([
-    loadWallet(),
+    loadWallet({ force: forceWallet }),
     includeOrders ? loadOrders({ force: forceOrders }) : Promise.resolve()
   ]);
 }
@@ -1027,13 +1069,16 @@ async function loadSession() {
   renderBasket();
   recordActivity();
   afterFirstPaint(() => {
-    refreshAccountData({ includeOrders: true, forceOrders: true });
+    refreshAccountData({ includeOrders: true });
   });
 }
 
 function resetSignedOutState(message = "Sign in to order lunch.") {
   state.account = null;
   state.rowenaNotificationKey = null;
+  state.leaveDays = 0;
+  state.leaveDaysAccountKey = null;
+  leaveDaysInput.value = "0";
   hideRowenaNotification();
   state.selections.clear();
   state.orderKeys.clear();
@@ -1101,6 +1146,7 @@ async function bootstrap() {
 refreshButton.addEventListener("click", async () => {
   await Promise.all([
     loadMenus(true),
+    state.account ? loadWallet({ force: true }) : Promise.resolve(),
     state.account ? loadOrders({ force: true }) : Promise.resolve()
   ]);
 });
@@ -1156,10 +1202,11 @@ loginForm.addEventListener("submit", async (event) => {
       credentialWarning = "Login succeeded, but the password could not be saved by the credential manager.";
     }
     state.account = data.account;
+    if (data.balance) renderWallet({ balance: data.balance });
     recordActivity();
     renderAccount();
     afterFirstPaint(() => {
-      refreshAccountData({ includeOrders: true, forceOrders: true });
+      refreshAccountData({ includeOrders: true });
     });
     if (credentialWarning) {
       showSystemNotification("Password not saved", credentialWarning, { tone: "warning", timeout: 12000 });
@@ -1209,6 +1256,15 @@ notificationRules.addEventListener("click", (event) => {
 todayOrdersRefreshButton.addEventListener("click", () => loadOrders({ force: true }));
 dismissRowenaNotification.addEventListener("click", attemptRowenaNotificationDismiss);
 dismissSystemNotification.addEventListener("click", hideSystemNotification);
+leaveDaysInput.addEventListener("input", () => {
+  if (!state.account) return;
+  const cycle = creditCycle();
+  state.leaveDays = Math.min(cycle.workingDays, Math.max(0, Math.floor(Number(leaveDaysInput.value) || 0)));
+  leaveDaysInput.value = String(state.leaveDays);
+  const accountKey = String(state.account.username || state.account.name || "account").toLowerCase();
+  localStorage.setItem(`soodering.leaveDays.${accountKey}`, String(state.leaveDays));
+  renderCredit();
+});
 
 ordersList.addEventListener("click", async (event) => {
   const button = event.target.closest(".cancel-order-button");
@@ -1224,7 +1280,7 @@ ordersList.addEventListener("click", async (event) => {
       body: JSON.stringify({ cancelUrl: button.dataset.cancelUrl })
     });
     renderOrders({ orders: result.orders });
-    await refreshAccountData({ includeOrders: true, forceOrders: true });
+    await refreshAccountData({ includeOrders: true, forceOrders: true, forceWallet: true });
   } catch (error) {
     button.textContent = "Failed";
     ordersList.insertAdjacentHTML("afterbegin", `<p class="meta">${escapeHtml(error.message)}</p>`);
