@@ -805,7 +805,9 @@ async function submitProducts(products, successMessage) {
   renderOrderProgress(progressItems, { active: true });
   cartStatus.textContent = `Sending ${products.length} date${products.length === 1 ? "" : "s"} to the server queue...`;
 
-  const response = await apiWithRelogin("/api/order/queue", {
+  let response;
+  try {
+    response = await apiWithRelogin("/api/order/queue", {
     method: "POST",
     body: JSON.stringify({
       selections: products.map((item) => ({ productId: item.id, date: item.date, quantity: 1 })),
@@ -813,7 +815,17 @@ async function submitProducts(products, successMessage) {
       notes: "",
       idempotencyKey: `queue_${orderOperationKey(products[0])}_${products.length}`
     })
-  });
+    });
+  } catch (error) {
+    progressItems.forEach((item) => {
+      item.status = "failed";
+      item.label = "Not submitted";
+      item.message = error.message;
+    });
+    renderOrderProgress(progressItems);
+    showSystemNotification("Ordering unavailable", error.message, { tone: "warning", timeout: 30000 });
+    throw error;
+  }
   const jobId = response.job.id;
   localStorage.setItem("sooderingActiveOrderJob", jobId);
   const acceptedMessage = `Orders for ${products.length} selected date${products.length === 1 ? "" : "s"} are accepted. You can close this browser.`;
@@ -1039,6 +1051,8 @@ async function loadUsage({ force = false } = {}) {
   try {
     const data = await api("/api/usage?limit=100", { headers: {} });
     renderNotificationRules(data.rules);
+    const restrictions = await api("/api/admin/order-restrictions", { headers: {} });
+    document.querySelector("#orderRestrictionsInput").value = restrictions.matches.join("\n");
     state.usageLoaded = true;
     renderUsage(data.entries || []);
   } catch (error) {
@@ -1224,6 +1238,28 @@ logoutButton.addEventListener("click", async () => {
 });
 
 usageRefreshButton.addEventListener("click", () => loadUsage({ force: true }));
+
+document.querySelector("#orderRestrictionsForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = document.querySelector("#saveOrderRestrictionsButton");
+  const status = document.querySelector("#orderRestrictionsStatus");
+  const input = document.querySelector("#orderRestrictionsInput");
+  button.disabled = true;
+  status.textContent = "Saving restrictions...";
+  try {
+    const matches = input.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    const data = await api("/api/admin/order-restrictions", {
+      method: "POST",
+      body: JSON.stringify({ matches })
+    });
+    input.value = data.matches.join("\n");
+    status.textContent = "Restrictions saved. Remove a line and save to restore that user's access.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 rowenaEditorForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   saveRowenaMessageButton.disabled = true;

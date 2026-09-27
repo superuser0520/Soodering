@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  normalizeOrderRestrictions,
+  isOrderRestricted,
   decodeHtml,
   createSiteSession,
   buildMenuDateRange,
@@ -20,6 +22,24 @@ const {
   splitStall,
   usageUser
 } = require("../server");
+
+test("order restrictions match email fragments without case sensitivity and exempt the admin", () => {
+  const matches = normalizeOrderRestrictions([" Rowena ", "ROWENA", "other@example.com"]);
+  assert.deepEqual(matches, ["rowena", "other@example.com"]);
+  assert.equal(isOrderRestricted("Rowena.Tan@example.com", matches), true);
+  assert.equal(isOrderRestricted("anotherrowena@example.com", matches), true);
+  assert.equal(isOrderRestricted("someone@example.com", matches), false);
+  assert.equal(isOrderRestricted("rowena@example.com", []), false);
+  const { config } = require("../config");
+  assert.equal(isOrderRestricted(config.usageAdminEmail, ["@"]), false);
+});
+
+test("order restrictions reject invalid rules and allow clearing all restrictions", () => {
+  assert.deepEqual(normalizeOrderRestrictions([]), []);
+  for (const matches of [null, "rowena", [" "], [123], ["x".repeat(101)]]) {
+    assert.throws(() => normalizeOrderRestrictions(matches), { status: 400 });
+  }
+});
 
 test("usage logs prefer the cafeteria display name", () => {
   assert.equal(usageUser({

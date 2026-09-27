@@ -69,6 +69,8 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 - Upcoming orders show the ordered item and price.
 - Upcoming orders can be cancelled from the app when the cafeteria provides a cancel link.
 - Pick one meal per date, then use `Place selected orders`.
+- The owner account (Soo Lih Jing, `soolihjing@shimano.com.sg` by default) can manage ordering restrictions in the Usage tab. Enter one name or email fragment per line; matching is case-insensitive. Matching users see only "Request access usage from the admin." when attempting to order. Remove a line and save to restore access. The owner is exempt.
+- Restrictions persist in `data/order-restrictions.json` on the running server and apply to each date of background jobs. They apply only to that server; independent desktop installations do not share restriction lists. A checkout already submitted cannot be undone by adding a restriction.
 - Orders use the default delivery time `11:30 - 11:55`.
 - Multi-date selections are submitted as separate cafeteria checkouts, one per date.
 - The browser asks for confirmation before a real cafeteria order is submitted.

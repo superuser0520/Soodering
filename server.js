@@ -11,6 +11,7 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
 const ROWENA_SETTINGS_FILE = path.join(DATA_DIR, "rowena-settings.json");
+const ORDER_RESTRICTIONS_FILE = path.join(DATA_DIR, "order-restrictions.json");
 const MENU_CACHE_FILE = path.join(DATA_DIR, "menu-cache.json");
 const EXTENDED_MENU_CACHE_FILE = path.join(DATA_DIR, "extended-menu-cache.json");
 const DEFAULT_TIME_SLOTS = config.defaultTimeSlots;
@@ -351,6 +352,38 @@ async function readNotificationRules() {
   }
 }
 
+function normalizeOrderRestrictions(matches) {
+  if (!Array.isArray(matches) || matches.some((match) => typeof match !== "string" || !match.trim() || match.trim().length > 100)) {
+    const error = new Error("Enter a name or email fragment of 1 to 100 characters for each restriction.");
+    error.status = 400;
+    throw error;
+  }
+  return [...new Set(matches.map((match) => match.trim().toLowerCase()))];
+}
+
+async function readOrderRestrictions() {
+  try {
+    return normalizeOrderRestrictions(JSON.parse(await readFile(ORDER_RESTRICTIONS_FILE, "utf8")).matches);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function isOrderRestricted(username, matches) {
+  const email = String(username || "").toLowerCase();
+  return email !== USAGE_ADMIN_EMAIL && matches.some((match) => email.includes(match));
+}
+
+async function assertOrderAccess(session) {
+  await ensureLoggedIn(session);
+  if (isOrderRestricted(session.account.username, await readOrderRestrictions())) {
+    const error = new Error("Request access usage from the admin.");
+    error.status = 403;
+    throw error;
+  }
+}
+
 async function saveNotificationRules(body) {
   const rules = normalizeNotificationRules(body.rules);
   if (!Array.isArray(body.rules) || rules.length !== body.rules.length) {
@@ -686,8 +719,6 @@ async function placeBulkOrder(session, { selections = [], timeSlot = "", notes =
     throw new Error("Please select at least one meal.");
   }
 
-  if (selections.length > 20) throw new Error("A maximum of 20 meals can be ordered at once.");
-
   const results = [];
   try {
     for (const selection of selections) {
@@ -755,6 +786,7 @@ async function runOrderJob(job, credentials, { selections, timeSlot = "", notes 
       item.status = "ordering";
       item.message = "Submitting now...";
       try {
+        await assertOrderAccess(workerSession);
         await clearCart(workerSession);
         await addToCart(workerSession, {
           productId: selection.productId,
@@ -813,7 +845,6 @@ function createOrderJob(session, body) {
   if (!Array.isArray(selections) || selections.length === 0) {
     throw new Error("Please select at least one meal.");
   }
-  if (selections.length > 20) throw new Error("A maximum of 20 meals can be ordered at once.");
   for (const selection of selections) {
     if (!selection.productId || !/^\d{4}-\d{2}-\d{2}$/.test(selection.date || "")) {
       throw new Error("Every selection requires a valid product and delivery date.");
@@ -1356,6 +1387,28 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     const session = getRequestSession(request, response, { touch: url.pathname !== "/api/keepalive" });
 
+    if (["/api/cart/add", "/api/order/place", "/api/order/bulk", "/api/order/queue"].includes(url.pathname) && request.method === "POST") {
+      await assertOrderAccess(session);
+    }
+
+    if (url.pathname === "/api/admin/order-restrictions") {
+      await ensureLoggedIn(session);
+      assertUsageAdmin(session);
+      if (request.method === "GET") {
+        sendJson(response, 200, { matches: await readOrderRestrictions() });
+      } else if (request.method === "POST") {
+        const matches = normalizeOrderRestrictions((await readJsonBody(request)).matches);
+        await mkdir(DATA_DIR, { recursive: true });
+        const temporaryFile = `${ORDER_RESTRICTIONS_FILE}.${crypto.randomUUID()}.tmp`;
+        await writeFile(temporaryFile, JSON.stringify({ matches }, null, 2), "utf8");
+        await rename(temporaryFile, ORDER_RESTRICTIONS_FILE);
+        sendJson(response, 200, { matches });
+      } else {
+        sendJson(response, 405, { error: "Method not allowed." });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/config") {
       sendJson(response, 200, publicConfig());
       return;
@@ -1591,6 +1644,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  normalizeOrderRestrictions,
+  isOrderRestricted,
   decodeHtml,
   createSiteSession,
   isSessionExpired,
