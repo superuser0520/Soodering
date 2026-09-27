@@ -525,7 +525,9 @@ h3 { font-size: 16px; line-height: 1.2; }
   width: 12px;
 }
 
-.order-progress-row.ordering .order-progress-dot {
+.order-progress-row.ordering .order-progress-dot,
+.order-progress-row.verifying .order-progress-dot,
+.order-progress-row.retrying .order-progress-dot {
   animation: pulse 0.8s ease-in-out infinite alternate;
   background: var(--brand);
 }
@@ -545,6 +547,10 @@ h3 { font-size: 16px; line-height: 1.2; }
 .order-progress-row.failed .order-progress-dot {
   background: var(--danger);
 }
+.order-progress-row.needs_review { border-color: rgba(180, 120, 0, 0.4); }
+.order-progress-row.needs_review .order-progress-dot { background: #b47800; }
+#retryFailedOrdersButton { margin: 12px 0; width: 100%; }
+#retryFailedOrdersButton[hidden] { display: none; }
 
 .order-progress-status {
   color: var(--muted);

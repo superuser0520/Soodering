@@ -28,6 +28,8 @@ const state = {
   idleTimer: null,
   menuRefreshTimer: null,
   orderKeys: new Map(),
+  failedOrderProducts: [],
+  isOrdering: false,
   rowenaNotificationKey: null,
   leaveDays: 0,
   leaveDaysAccountKey: null
@@ -658,6 +660,8 @@ function setMenuLoading(isLoading, message) {
 }
 
 function setOrderingProgress(isOrdering, message) {
+  state.isOrdering = isOrdering;
+  document.querySelector("#retryFailedOrdersButton").disabled = isOrdering;
   placeOrderButton.disabled = isOrdering || selectedItems().length === 0;
   quickChineseButton.disabled = isOrdering;
   quickMalayButton.disabled = isOrdering;
@@ -668,7 +672,7 @@ function setOrderingProgress(isOrdering, message) {
 
 function renderBasket() {
   const items = selectedItems();
-  placeOrderButton.disabled = items.length === 0;
+  placeOrderButton.disabled = state.isOrdering || items.length === 0;
   clearSelectionButton.disabled = false;
 
   if (items.length === 0) {
@@ -807,18 +811,23 @@ async function submitProducts(products, successMessage) {
   showSystemNotification("Orders accepted", acceptedMessage, { tone: "success", timeout: 30000 });
 
   let job = response.job;
-  while (["queued", "running"].includes(job.status)) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    job = (await apiWithRelogin(`/api/order/job?id=${encodeURIComponent(jobId)}`, { headers: {} })).job;
+  const applyJobProgress = () => {
     const jobItems = new Map(job.items.map((item) => [`${item.date}|${item.productId}`, item]));
+    const labels = { done: "Ordered", ordering: "Ordering", verifying: "Checking", retrying: "Retrying", failed: "Failed", needs_review: "Check orders" };
     progressItems.forEach((item) => {
       const queued = jobItems.get(`${item.date}|${item.id}`);
       if (!queued) return;
       item.status = queued.status;
-      item.label = queued.status === "done" ? "Ordered" : queued.status === "ordering" ? "Ordering" : queued.status === "failed" ? "Failed" : "Queued";
+      item.label = labels[queued.status] || "Queued";
       item.message = queued.message;
     });
-    renderOrderProgress(progressItems, { active: true });
+    renderOrderProgress(progressItems, { active: ["queued", "running"].includes(job.status) });
+  };
+  applyJobProgress();
+  while (["queued", "running"].includes(job.status)) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    job = (await apiWithRelogin(`/api/order/job?id=${encodeURIComponent(jobId)}`, { headers: {} })).job;
+    applyJobProgress();
   }
 
   localStorage.removeItem("sooderingActiveOrderJob");
@@ -827,21 +836,34 @@ async function submitProducts(products, successMessage) {
     const key = `${item.date}|${item.id}`;
     if (placedKeys.has(key)) {
       state.selections.delete(item.date);
-      state.orderKeys.delete(key);
     }
+    // A deliberate retry needs a fresh operation ID. Keep IDs unchanged while
+    // the request or job outcome is still unknown, so network retries deduplicate.
+    state.orderKeys.delete(key);
   });
+  state.failedOrderProducts = products.filter((item) => !placedKeys.has(`${item.date}|${item.id}`));
+  const retryButton = document.querySelector("#retryFailedOrdersButton");
+  retryButton.hidden = state.failedOrderProducts.length === 0;
+  retryButton.textContent = `Retry ${state.failedOrderProducts.length} failed date${state.failedOrderProducts.length === 1 ? "" : "s"}`;
   const successCount = job.placed.length;
   const failureCount = job.failed.length;
+  const reviewCount = progressItems.filter((item) => item.status === "needs_review").length;
   if (job.failed.some((item) => item.error === "Request access usage from the admin.")) {
     showOrderAccessWarning({ partial: successCount > 0 });
   }
 
-  cartStatus.textContent = failureCount
-    ? `${successCount} ordered, ${failureCount} failed. Check the progress list.`
+  const resultMessage = failureCount
+    ? `${successCount} ordered, ${failureCount - reviewCount} failed${reviewCount ? `, ${reviewCount} need checking` : ""}. Check the progress list.`
     : successMessage;
   renderBasket();
+  cartStatus.textContent = resultMessage;
   renderOrderProgress(progressItems);
-  await refreshAccountData({ includeOrders: true, forceOrders: true, forceWallet: true });
+  try {
+    await refreshAccountData({ includeOrders: true, forceOrders: true, forceWallet: true });
+    cartStatus.textContent = resultMessage;
+  } catch {
+    cartStatus.textContent = `${resultMessage} Account refresh failed; refresh Upcoming orders to check.`;
+  }
 }
 
 async function quickOrder(label, stallNames) {
@@ -1072,6 +1094,8 @@ function resetSignedOutState(message = "Sign in to order lunch.") {
   hideRowenaNotification();
   state.selections.clear();
   state.orderKeys.clear();
+  state.failedOrderProducts = [];
+  document.querySelector("#retryFailedOrdersButton").hidden = true;
   state.upcomingOrders = [];
   state.orderedDates = new Set();
   state.walletBalance = "";
@@ -1394,6 +1418,17 @@ clearSelectionButton.addEventListener("click", () => {
 
 quickChineseButton.addEventListener("click", () => quickOrder("Quick Non Halal Order", ["Chinese Stall", "International Stall", "Malay Stall"]));
 quickMalayButton.addEventListener("click", () => quickOrder("Quick Halal Weekday", ["Malay Stall", "International Stall"]));
+
+document.querySelector("#retryFailedOrdersButton").addEventListener("click", async () => {
+  const products = [...state.failedOrderProducts];
+  if (!products.length || state.isOrdering) return;
+  const summary = products.map((item) => `${formatDate(item.date)}: ${item.stall} - ${item.item}`).join("\n");
+  if (!window.confirm(`Retry these ${products.length} dates? SooDering will check existing orders first.\n\n${summary}`)) return;
+  setOrderingProgress(true, "Checking and retrying failed dates...");
+  try { await submitProducts(products, "Failed dates have been ordered or confirmed in cafeteria orders."); }
+  catch (error) { cartStatus.textContent = error.message; }
+  finally { setOrderingProgress(false); }
+});
 
 placeOrderButton.addEventListener("click", async () => {
   const selections = selectedItems();

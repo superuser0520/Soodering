@@ -34,6 +34,8 @@ const ORDERS_CACHE_MS = 60 * 1000;
 const sessions = new Map();
 const orderJobs = new Map();
 const orderJobKeys = new Map();
+const orderWorkerChains = new Map();
+const uncertainOrderDates = new Set();
 let menuLoadPromise = null;
 let usageWriteChain = Promise.resolve();
 let restrictionWriteChain = Promise.resolve();
@@ -651,7 +653,7 @@ function parseOrderDeliveryDate(delivery = "") {
 
 function parseOrders(html) {
   const tbody = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i)?.[1] || "";
-  return [...tbody.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].slice(0, 30).map((rowMatch) => {
+  return [...tbody.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((rowMatch) => {
     const cells = [...rowMatch[1].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((cell) => stripTags(cell[1]));
     const viewUrl = decodeHtml(rowMatch[1].match(/href=["']([^"']*view-order[^"']*)["']/i)?.[1] || "");
     const cancelUrl = decodeHtml(rowMatch[1].match(/href=["']([^"']*cancel_order[^"']*)["']/i)?.[1] || "");
@@ -748,6 +750,11 @@ async function addToCart(session, { productId, date, quantity = 1 }) {
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body
   });
+  if (!response.ok) {
+    const error = new Error(`Could not add the meal to the cafeteria cart: ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   await response.text();
   return parseCart(await readProtectedPage(session, "/cart/"));
 }
@@ -762,7 +769,7 @@ async function clearCart(session) {
   return cart;
 }
 
-async function placeOrder(session, { timeSlot = "", notes = "" }) {
+async function placeOrder(session, { timeSlot = "", notes = "", includeOrders = true, onCheckoutStart }) {
   await ensureLoggedIn(session);
   const checkoutHtml = await readProtectedPage(session, "/checkout/");
   const checkout = parseCheckout(checkoutHtml);
@@ -790,7 +797,11 @@ async function placeOrder(session, { timeSlot = "", notes = "" }) {
     woocommerce_checkout_place_order: "Place order"
   });
 
-  const response = await session.request("/?wc-ajax=checkout", {
+  let response;
+  let text;
+  if (typeof onCheckoutStart === "function") await onCheckoutStart();
+  try {
+    response = await session.request("/?wc-ajax=checkout", {
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -799,23 +810,147 @@ async function placeOrder(session, { timeSlot = "", notes = "" }) {
     },
     body
   });
-  const text = await response.text();
+    text = await response.text();
+  } catch (error) {
+    error.orderOutcomeUnknown = true;
+    throw error;
+  }
   let payload;
   try {
     payload = JSON.parse(text);
   } catch {
-    payload = { result: response.ok ? "unknown" : "failure", messages: stripTags(text).slice(0, 500) };
+    const error = new Error("The cafeteria returned an unreadable checkout response.");
+    error.orderOutcomeUnknown = true;
+    throw error;
   }
 
   if (payload.result !== "success") {
-    throw new Error(stripTags(payload.messages || "Checkout failed."));
+    const error = new Error(stripTags(payload.messages || "Checkout failed."));
+    error.checkoutRejected = payload.result === "failure";
+    error.orderOutcomeUnknown = !error.checkoutRejected;
+    if (!response.ok) error.status = response.status;
+    throw error;
   }
 
   return {
     result: payload.result,
     redirect: payload.redirect || "",
-    orders: await loadOrders(session)
+    ...(includeOrders ? await refreshOrdersAfterCheckout(session) : {})
   };
+}
+
+async function refreshOrdersAfterCheckout(session) {
+  try { return { orders: await loadOrders(session) }; } catch (error) {
+    return { orders: null, ordersRefreshError: `Order submitted, but the order list could not be refreshed: ${error.message}` };
+  }
+}
+
+function activeOrderForDate(orders, date) {
+  return orders.find((order) => order.deliveryDate === date && !/cancelled|canceled|failed|refunded/i.test(order.status || ""));
+}
+
+function isTransientOrderError(error) {
+  if (error.status === 403 || error.noRetry) return false;
+  if (/insufficient|wallet|balance|sold out|out of stock|cutoff|cut-off|ordering closed|no delivery time slot|request access usage/i.test(error.message || "")) return false;
+  if (error.status === 429 || error.status >= 500) return true;
+  return error.name === "TimeoutError" || error.name === "AbortError"
+    || /fetch failed|network|socket|ECONN|ETIMEDOUT|temporar|try again|expired|nonce|\b429\b|\b50[0234]\b/i.test(error.message || "");
+}
+
+function uncertainOrderFile(dateKey) {
+  return path.join(DATA_DIR, "pending-checkouts", `${crypto.createHash("sha256").update(dateKey).digest("hex")}.json`);
+}
+
+async function readUncertainOrder(dateKey) {
+  try { await readFile(uncertainOrderFile(dateKey)); return true; } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function recordUncertainOrder(dateKey) {
+  const file = uncertainOrderFile(dateKey);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ pending: true, createdAt: new Date().toISOString() }), { mode: 0o600 });
+}
+
+async function clearUncertainOrder(dateKey) {
+  await unlink(uncertainOrderFile(dateKey)).catch((error) => { if (error.code !== "ENOENT") throw error; });
+}
+
+async function submitQueuedSelection(session, selection, options, item, dependencies = {}) {
+  const access = dependencies.access || assertOrderAccess;
+  const readOrders = dependencies.readOrders || ((session) => loadOrders(session, { requireComplete: true }));
+  const clear = dependencies.clear || clearCart;
+  const add = dependencies.add || addToCart;
+  const checkout = dependencies.checkout || placeOrder;
+  const wait = dependencies.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const uncertainDates = dependencies.uncertainDates || uncertainOrderDates;
+  const readPending = dependencies.readPending || readUncertainOrder;
+  const recordPending = dependencies.recordPending || recordUncertainOrder;
+  const clearPending = dependencies.clearPending || clearUncertainOrder;
+  const dateKey = `${session.account.username.toLowerCase()}|${selection.date}`;
+  if (await readPending(dateKey)) uncertainDates.add(dateKey);
+  const confirmed = async (order) => {
+    uncertainDates.delete(dateKey);
+    await clearPending(dateKey).catch(() => {});
+    return { result: "success", redirect: order.viewUrl || "", alreadyOrdered: true };
+  };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    item.attempts = attempt;
+    await access(session);
+    item.status = "verifying";
+    item.message = "Checking cafeteria orders before submitting...";
+    let orders;
+    try { orders = await readOrders(session); } catch (error) {
+      const verificationError = new Error(`Could not verify cafeteria orders. No new checkout was submitted. ${error.message}`);
+      verificationError.needsReview = uncertainDates.has(dateKey);
+      throw verificationError;
+    }
+    const existing = activeOrderForDate(orders, selection.date);
+    if (existing) return confirmed(existing);
+    if (uncertainDates.has(dateKey)) {
+      const error = new Error("A previous checkout could not be confirmed. Check Upcoming orders or contact the cafeteria before submitting this date again.");
+      error.needsReview = true;
+      throw error;
+    }
+    try {
+      item.status = "ordering";
+      item.message = `Submitting now (attempt ${attempt} of 3)...`;
+      await clear(session);
+      await add(session, { productId: selection.productId, date: selection.date, quantity: selection.quantity || 1 });
+      const result = await checkout(session, { ...options, includeOrders: false, onCheckoutStart: async () => {
+        await recordPending(dateKey);
+        uncertainDates.add(dateKey);
+      } });
+      uncertainDates.delete(dateKey);
+      await clearPending(dateKey).catch(() => {});
+      return result;
+    } catch (error) {
+      if (error.orderOutcomeUnknown) {
+        uncertainDates.add(dateKey);
+        await recordPending(dateKey);
+        item.status = "verifying";
+        item.message = "Checkout response was lost. Checking whether the order was submitted...";
+        for (let check = 1; check <= 2; check++) {
+          await wait(check * 1000);
+          try {
+            const order = activeOrderForDate(await readOrders(session), selection.date);
+            if (order) return confirmed(order);
+          } catch { /* An incomplete order list cannot establish a failed checkout. */ }
+        }
+        const reviewError = new Error("Checkout could not be confirmed. Check Upcoming orders or contact the cafeteria. SooDering has not submitted another checkout for this date.");
+        reviewError.needsReview = true;
+        throw reviewError;
+      }
+      uncertainDates.delete(dateKey);
+      await clearPending(dateKey).catch(() => {});
+      if (attempt === 3 || !isTransientOrderError(error)) throw error;
+      item.status = "retrying";
+      item.message = `Temporary failure. Retrying after checking the order list (attempt ${attempt + 1} of 3)...`;
+      await wait(attempt * 1000);
+    }
+  }
 }
 
 async function placeBulkOrder(session, { selections = [], timeSlot = "", notes = "" }) {
@@ -848,7 +983,7 @@ async function placeBulkOrder(session, { selections = [], timeSlot = "", notes =
     return {
       result: "success",
       placed: results,
-      orders: await loadOrders(session)
+      ...await refreshOrdersAfterCheckout(session)
     };
   } finally {
     try {
@@ -891,16 +1026,9 @@ async function runOrderJob(job, credentials, { selections, timeSlot = "", notes 
       item.status = "ordering";
       item.message = "Submitting now...";
       try {
-        await assertOrderAccess(workerSession);
-        await clearCart(workerSession);
-        await addToCart(workerSession, {
-          productId: selection.productId,
-          date: selection.date,
-          quantity: selection.quantity || 1
-        });
-        const placed = await placeOrder(workerSession, { timeSlot, notes });
+        const placed = await submitQueuedSelection(workerSession, selection, { timeSlot, notes }, item);
         item.status = "done";
-        item.message = "Ordered";
+        item.message = placed.alreadyOrdered ? "Confirmed in cafeteria orders; no duplicate submitted." : "Ordered";
         job.placed.push({
           date: selection.date,
           productId: selection.productId,
@@ -908,7 +1036,7 @@ async function runOrderJob(job, credentials, { selections, timeSlot = "", notes 
           redirect: placed.redirect
         });
       } catch (error) {
-        item.status = "failed";
+        item.status = error.needsReview ? "needs_review" : "failed";
         item.message = error.message || "Order failed.";
         job.failed.push({
           date: selection.date,
@@ -987,7 +1115,15 @@ function createOrderJob(session, body) {
   };
   orderJobs.set(job.id, job);
   orderJobKeys.set(key, job.id);
-  void runOrderJob(job, { ...credentials }, body);
+  // Cafeteria carts belong to an account. Keep its background jobs sequential
+  // so two workers cannot clear each other's cart or retry the same date together.
+  const workerKey = credentials.username.toLowerCase();
+  const previous = orderWorkerChains.get(workerKey) || Promise.resolve();
+  const running = previous.catch(() => {}).then(() => runOrderJob(job, { ...credentials }, body));
+  orderWorkerChains.set(workerKey, running);
+  void running.finally(() => {
+    if (orderWorkerChains.get(workerKey) === running) orderWorkerChains.delete(workerKey);
+  }).catch(() => {});
   return job;
 }
 
@@ -1033,12 +1169,23 @@ async function cancelOrder(session, cancelUrl) {
   };
 }
 
-async function loadOrders(session) {
+async function loadOrders(session, { requireComplete = false } = {}) {
   await ensureLoggedIn(session);
-  const firstPage = parseOrders(await readProtectedPage(session, "/orders/"));
+  const readPage = async (pathname) => {
+    const html = await readProtectedPage(session, pathname);
+    const orders = parseOrders(html);
+    if (requireComplete && (looksLoggedOut(html) || (!orders.length && !/<tbody\b|no orders? (?:has|have) been made|no orders? (?:found|yet)/i.test(html)))) {
+      throw new Error("The cafeteria order list was not readable.");
+    }
+    return orders;
+  };
+  const firstPage = await readPage("/orders/");
   const extraPages = await Promise.allSettled(
-    Array.from({ length: 5 }, (_, index) => readProtectedPage(session, `/orders/${index + 2}`).then(parseOrders))
+    Array.from({ length: 5 }, (_, index) => readPage(`/orders/${index + 2}`))
   );
+  if (requireComplete && extraPages.some((result) => result.status === "rejected")) {
+    throw new Error("Some cafeteria order pages could not be checked. Please try again later.");
+  }
   const pages = [firstPage, ...extraPages.filter((result) => result.status === "fulfilled").map((result) => result.value)];
 
   const seen = new Set();
@@ -1765,6 +1912,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  submitQueuedSelection,
+  activeOrderForDate,
+  placeOrder,
   normalizeOrderRestrictions,
   isOrderRestricted,
   decodeHtml,

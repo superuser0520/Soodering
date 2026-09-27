@@ -75,6 +75,8 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 - Set `SOODEERING_DATA_DIR` to an absolute writable folder to keep runtime data outside the checkout, for example when running as a service. The default is the repository's `data` folder. Saving errors are shown in the admin editor.
 - Orders use the default delivery time `11:30 - 11:55`.
 - Multi-date selections are submitted as separate cafeteria checkouts, one per date.
+- The background queue checks existing orders before submitting each date. Temporary errors retry up to three attempts with short delays; permanent failures such as insufficient funds or restricted access are not repeatedly submitted. Retry failed dates starts a fresh job for the unsuccessful dates and verifies them again first. Jobs for the same account run sequentially.
+- A successful checkout stays successful even if refreshing account data fails. A lost or unreadable checkout response is checked against cafeteria orders and marked Check orders if it cannot be confirmed; it is not blindly resubmitted. Pending checkout markers persist in `data/pending-checkouts` across server restarts until the order can be confirmed. Do not delete these markers to force a retry without checking with the cafeteria.
 - The browser asks for confirmation before a real cafeteria order is submitted.
 - Repeated requests with the same operation ID return the original result instead of placing a duplicate order.
 - Usage records show the cafeteria display name, rotate by size, and are deleted after the configured retention period.
