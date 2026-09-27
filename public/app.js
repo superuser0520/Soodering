@@ -499,11 +499,15 @@ function showOrderAccessWarning({ partial = false } = {}) {
   const dialog = document.querySelector("#orderAccessDialog");
   document.querySelector("#orderAccessMessage").textContent = partial
     ? "Some orders were already submitted. The remaining restricted orders were not submitted. Please contact the admin to request access."
-    : "Your order was not submitted. Please contact the admin to request access before trying again.";
+    : "No order has been submitted by SooDering.";
   if (!dialog.open) dialog.showModal();
 }
 
 function showSystemNotification(title, message, { tone = "error", timeout = 10000 } = {}) {
+  if (message === "Request access usage from the admin.") {
+    showOrderAccessWarning();
+    return;
+  }
   systemNotificationTitle.textContent = title;
   systemNotificationMessage.textContent = message;
   systemNotification.dataset.tone = tone;

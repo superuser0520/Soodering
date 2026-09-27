@@ -6,7 +6,7 @@
     <title>SooDering</title>
     <link rel="icon" href="/soodering-icon.png" type="image/png">
     <link rel="apple-touch-icon" href="/soodering-icon.png">
-    <link rel="stylesheet" href="/styles.css?v=26">
+    <link rel="stylesheet" href="/styles.css?v=27">
   </head>
   <body>
     <main class="app-shell">
@@ -230,13 +230,14 @@
       <button id="dismissSystemNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
     </aside>
 
-    <dialog id="orderAccessDialog" class="order-access-dialog" aria-labelledby="orderAccessTitle" aria-describedby="orderAccessMessage">
+    <dialog id="orderAccessDialog" class="order-access-dialog" aria-labelledby="orderAccessTitle" aria-describedby="orderAccessRequest orderAccessMessage">
       <span class="order-access-icon" aria-hidden="true">!</span>
-      <h2 id="orderAccessTitle">Request access usage from the admin.</h2>
-      <p id="orderAccessMessage">Your order was not submitted. Please contact the admin to request access before trying again.</p>
+      <h2 id="orderAccessTitle">Ordering unavailable</h2>
+      <p id="orderAccessRequest">Request access usage from the admin.</p>
+      <p id="orderAccessMessage" class="order-access-result">No order has been submitted by SooDering.</p>
       <form method="dialog"><button type="submit" autofocus>OK</button></form>
     </dialog>
 
-    <script src="/app.js?v=33"></script>
+    <script src="/app.js?v=34"></script>
   </body>
 </html>
