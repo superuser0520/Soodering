@@ -494,6 +494,15 @@ function hideSystemNotification() {
   systemNotification.hidden = true;
 }
 
+function showOrderAccessWarning({ partial = false } = {}) {
+  hideSystemNotification();
+  const dialog = document.querySelector("#orderAccessDialog");
+  document.querySelector("#orderAccessMessage").textContent = partial
+    ? "Some orders were already submitted. The remaining restricted orders were not submitted. Please contact the admin to request access."
+    : "Your order was not submitted. Please contact the admin to request access before trying again.";
+  if (!dialog.open) dialog.showModal();
+}
+
 function showSystemNotification(title, message, { tone = "error", timeout = 10000 } = {}) {
   systemNotificationTitle.textContent = title;
   systemNotificationMessage.textContent = message;
@@ -780,7 +789,11 @@ async function submitProducts(products, successMessage) {
       item.message = error.message;
     });
     renderOrderProgress(progressItems);
-    showSystemNotification("Ordering unavailable", error.message, { tone: "warning", timeout: 30000 });
+    if (error.message === "Request access usage from the admin.") {
+      showOrderAccessWarning();
+    } else {
+      showSystemNotification("Ordering unavailable", error.message, { tone: "warning", timeout: 30000 });
+    }
     throw error;
   }
   const jobId = response.job.id;
@@ -815,6 +828,9 @@ async function submitProducts(products, successMessage) {
   });
   const successCount = job.placed.length;
   const failureCount = job.failed.length;
+  if (job.failed.some((item) => item.error === "Request access usage from the admin.")) {
+    showOrderAccessWarning({ partial: successCount > 0 });
+  }
 
   cartStatus.textContent = failureCount
     ? `${successCount} ordered, ${failureCount} failed. Check the progress list.`
