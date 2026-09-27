@@ -859,6 +859,26 @@ button.is-loading::after {
   margin-bottom: 18px;
 }
 
+.restrictions-panel { margin-bottom: 18px; }
+.restriction-add-form { display: grid; gap: 10px; }
+.restriction-add-form label { font-size: 14px; font-weight: 700; }
+.restriction-add-controls { display: flex; gap: 10px; align-items: stretch; }
+.restriction-add-controls input { flex: 1; min-width: 0; width: 100%; }
+.restriction-add-controls button { flex-shrink: 0; }
+.restriction-status { margin: 16px 0; overflow-wrap: anywhere; }
+.restriction-status[data-tone="error"] { color: #b42318; }
+.restriction-status[data-tone="success"] { color: #16703b; }
+.restriction-list { display: grid; gap: 10px; }
+.restriction-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: #f9fafb; }
+.restriction-row div { min-width: 0; }
+.restriction-row strong { display: block; overflow-wrap: anywhere; margin-bottom: 4px; }
+.restriction-row button { flex-shrink: 0; }
+.restriction-notice { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+@media (max-width: 560px) {
+  .restriction-add-controls { flex-direction: column; }
+  .restriction-row { align-items: stretch; flex-direction: column; gap: 10px; }
+}
+
 .notification-editor-form {
   display: grid;
   gap: 14px;
@@ -867,7 +887,16 @@ button.is-loading::after {
 .notification-editor-form textarea {
   min-height: 110px;
   resize: vertical;
+  background: #f9fafb;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text);
+  font: inherit;
+  padding: 12px;
+  width: 100%;
 }
+.notification-editor-form label { display: grid; gap: 8px; font-size: 14px; font-weight: 700; }
+.notification-editor-form input { width: 100%; min-width: 0; }
 
 #notificationRules {
   display: grid;

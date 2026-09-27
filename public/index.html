@@ -6,7 +6,7 @@
     <title>SooDering</title>
     <link rel="icon" href="/soodering-icon.png" type="image/png">
     <link rel="apple-touch-icon" href="/soodering-icon.png">
-    <link rel="stylesheet" href="/styles.css?v=24">
+    <link rel="stylesheet" href="/styles.css?v=25">
   </head>
   <body>
     <main class="app-shell">
@@ -27,7 +27,7 @@
           </label>
           <label class="remember-row" for="rememberInput">
             <input id="rememberInput" name="remember" type="checkbox">
-            <span>Remember my login</span>
+            <span>Auto login</span>
           </label>
           <p id="rememberHelp" class="meta remember-help"></p>
           <button id="loginButton" type="submit">
@@ -115,16 +115,22 @@
         </section>
 
         <section id="usageView" class="tab-panel" hidden>
-          <section class="panel">
-            <h2>Ban users from ordering</h2>
-            <p class="meta">Enter one name or email fragment per line. Any email containing that text is blocked from ordering, regardless of capitalization. Remove a line to restore access. The admin account always retains access.</p>
-            <form id="orderRestrictionsForm" class="notification-editor-form">
-              <label>Restricted names or emails
-                <textarea id="orderRestrictionsInput" rows="5" placeholder="One name or email fragment per line"></textarea>
-              </label>
-              <button id="saveOrderRestrictionsButton" type="submit">Save restrictions</button>
-              <p id="orderRestrictionsStatus" class="meta" role="status"></p>
+          <section class="panel restrictions-panel">
+            <div class="panel-heading">
+              <div><h2>Ordering restrictions</h2><p class="meta">Manage who can place orders through SooDering.</p></div>
+              <button id="refreshOrderRestrictionsButton" class="secondary" type="button">Refresh</button>
+            </div>
+            <form id="orderRestrictionsForm" class="restriction-add-form">
+              <label for="orderRestrictionsInput">Name or email to restrict</label>
+              <div class="restriction-add-controls">
+                <input id="orderRestrictionsInput" maxlength="100" placeholder="For example, rowena or rowena@example.com" required disabled>
+                <button id="saveOrderRestrictionsButton" type="submit" disabled>Save restriction</button>
+              </div>
+              <p class="meta">Matches any email containing this text, ignoring capitalization. The admin account is exempt.</p>
             </form>
+            <p id="orderRestrictionsStatus" class="restriction-status meta" role="status" aria-live="polite">Loading saved restrictions...</p>
+            <div id="orderRestrictionsList" class="restriction-list" aria-label="Saved restrictions"></div>
+            <p class="restriction-notice meta">Restricted users see: “Request access usage from the admin.”</p>
           </section>
           <section class="panel notification-editor-panel">
             <div class="panel-heading">
@@ -179,8 +185,8 @@
           </div>
           <div id="cartList" class="compact-list"></div>
           <div class="quick-order-actions">
-            <button id="quickChineseButton" class="secondary" type="button">Quick Chinese weekdays</button>
-            <button id="quickMalayButton" class="secondary" type="button">Quick Malay weekdays</button>
+            <button id="quickChineseButton" class="secondary" type="button" title="Chinese first, then International, then Malay">Quick Non Halal Order</button>
+            <button id="quickMalayButton" class="secondary" type="button" title="Malay first, then International">Quick Halal Weekday</button>
           </div>
           <div id="orderProgress" class="order-progress" hidden></div>
           <div class="checkout-panel">
@@ -224,6 +230,6 @@
       <button id="dismissSystemNotification" class="secondary" type="button" aria-label="Dismiss notification">×</button>
     </aside>
 
-    <script src="/app.js?v=31"></script>
+    <script src="/app.js?v=32"></script>
   </body>
 </html>

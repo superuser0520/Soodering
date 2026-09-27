@@ -62,15 +62,17 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 
 ## Notes
 
-- The browser version remembers only the email and leaves password storage to the browser's password manager. The Electron desktop app stores both using the operating system's encrypted credential facility.
+- Select Auto login before signing in to return without entering credentials again in the same browser. It works over a local network and survives server restarts. The browser holds an HttpOnly token; cafeteria credentials are encrypted in the server data folder. Returning renews the one-year token. Explicitly signing out disables Auto login; inactivity does not. Clearing browser cookies or server data requires signing in again. Electron also supports operating-system-encrypted credential storage.
 - Login sessions are kept only in memory and expire after 30 minutes of inactivity by default.
 - After login, the app automatically shows wallet balance and upcoming orders from today onward.
 - The menu homepage shows today’s cafeteria order for the currently signed-in user.
 - Upcoming orders show the ordered item and price.
 - Upcoming orders can be cancelled from the app when the cafeteria provides a cancel link.
 - Pick one meal per date, then use `Place selected orders`.
-- The owner account (Soo Lih Jing, `soolihjing@shimano.com.sg` by default) can manage ordering restrictions in the Usage tab. Enter one name or email fragment per line; matching is case-insensitive. Matching users see only "Request access usage from the admin." when attempting to order. Remove a line and save to restore access. The owner is exempt.
+- Quick Halal Weekday chooses Malay first, then International for each unordered weekday. Quick Non Halal Order chooses Chinese first, then International, then Malay. Both keep the configured meal exclusions and show the actual stall and meal before confirmation. These names select stall priorities; the app does not verify individual meals' halal certification.
+- The owner account (Soo Lih Jing, `soolihjing@shimano.com.sg` by default) can manage ordering restrictions in the Usage tab. Enter a name or email fragment and click Save restriction; matching is case-insensitive. Each saved restriction appears in a list with a Restore access button. Matching users see only "Request access usage from the admin." when attempting to order. The owner is exempt.
 - Restrictions persist in `data/order-restrictions.json` on the running server and apply to each date of background jobs. They apply only to that server; independent desktop installations do not share restriction lists. A checkout already submitted cannot be undone by adding a restriction.
+- Set `SOODEERING_DATA_DIR` to an absolute writable folder to keep runtime data outside the checkout, for example when running as a service. The default is the repository's `data` folder. Saving errors are shown in the admin editor.
 - Orders use the default delivery time `11:30 - 11:55`.
 - Multi-date selections are submitted as separate cafeteria checkouts, one per date.
 - The browser asks for confirmation before a real cafeteria order is submitted.

@@ -8,7 +8,7 @@ const PORT = config.port;
 const SITE_ORIGIN = config.siteOrigin;
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
 const PUBLIC_DIR = path.join(__dirname, "public");
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = process.env.SOODEERING_DATA_DIR ? path.resolve(process.env.SOODEERING_DATA_DIR) : path.join(__dirname, "data");
 const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
 const ROWENA_SETTINGS_FILE = path.join(DATA_DIR, "rowena-settings.json");
 const ORDER_RESTRICTIONS_FILE = path.join(DATA_DIR, "order-restrictions.json");
@@ -22,6 +22,10 @@ let cachedMenus = null;
 let cachedAt = 0;
 const CACHE_MS = config.menuCacheMs;
 const SESSION_COOKIE = "soodering_sid";
+const AUTO_LOGIN_COOKIE = "soodering_auto_login";
+const AUTO_LOGIN_MS = 365 * 24 * 60 * 60 * 1000;
+const AUTO_LOGIN_DIR = path.join(DATA_DIR, "auto-login");
+let autoLoginKeyPromise;
 const SESSION_MAX_AGE_MS = config.sessionCookieMaxAgeMs;
 const SESSION_IDLE_TIMEOUT_MS = config.sessionIdleTimeoutMs;
 const USAGE_ADMIN_EMAIL = config.usageAdminEmail;
@@ -32,6 +36,7 @@ const orderJobs = new Map();
 const orderJobKeys = new Map();
 let menuLoadPromise = null;
 let usageWriteChain = Promise.resolve();
+let restrictionWriteChain = Promise.resolve();
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -201,6 +206,77 @@ function parseCookies(header = "") {
   }).filter(([key]) => key));
 }
 
+function setAutoLoginCookie(request, response, token = "") {
+  const secure = request.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  const cookie = `${AUTO_LOGIN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${token ? Math.floor(AUTO_LOGIN_MS / 1000) : 0}${secure}`;
+  const existing = response.getHeader("Set-Cookie") || [];
+  response.setHeader("Set-Cookie", [...(Array.isArray(existing) ? existing : [existing]), cookie]);
+}
+
+function autoLoginFile(token) {
+  if (!/^[a-f0-9]{64}$/.test(token || "")) return null;
+  return path.join(AUTO_LOGIN_DIR, `${crypto.createHash("sha256").update(token).digest("hex")}.json`);
+}
+
+async function autoLoginKey() {
+  if (!autoLoginKeyPromise) {
+    autoLoginKeyPromise = (async () => {
+      await mkdir(AUTO_LOGIN_DIR, { recursive: true, mode: 0o700 });
+      const keyPath = path.join(AUTO_LOGIN_DIR, "key");
+      try { return await readFile(keyPath); } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        const key = crypto.randomBytes(32);
+        try { await writeFile(keyPath, key, { flag: "wx", mode: 0o600 }); } catch (error) {
+          if (error.code !== "EEXIST") throw error;
+        }
+        return readFile(keyPath);
+      }
+    })().catch((error) => { autoLoginKeyPromise = null; throw error; });
+  }
+  return autoLoginKeyPromise;
+}
+
+async function revokeAutoLogin(request, response) {
+  const file = autoLoginFile(parseCookies(request.headers.cookie)[AUTO_LOGIN_COOKIE]);
+  if (file) await unlink(file).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  setAutoLoginCookie(request, response);
+}
+
+async function saveAutoLogin(request, response, credentials) {
+  const key = await autoLoginKey();
+  const token = crypto.randomBytes(32).toString("hex");
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(credentials), "utf8"), cipher.final()]);
+  await writeFile(autoLoginFile(token), JSON.stringify({
+    iv: iv.toString("hex"), tag: cipher.getAuthTag().toString("hex"),
+    encrypted: encrypted.toString("hex"), expiresAt: Date.now() + AUTO_LOGIN_MS
+  }), { mode: 0o600 });
+  await revokeAutoLogin(request, response);
+  setAutoLoginCookie(request, response, token);
+}
+
+async function restoreAutoLogin(request, response, session) {
+  if (session.account) return;
+  const token = parseCookies(request.headers.cookie)[AUTO_LOGIN_COOKIE];
+  const file = autoLoginFile(token);
+  if (!file) return;
+  let saved;
+  try { saved = JSON.parse(await readFile(file, "utf8")); } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    setAutoLoginCookie(request, response);
+    return;
+  }
+  if (saved.expiresAt < Date.now()) { await revokeAutoLogin(request, response); return; }
+  const decipher = crypto.createDecipheriv("aes-256-gcm", await autoLoginKey(), Buffer.from(saved.iv, "hex"));
+  decipher.setAuthTag(Buffer.from(saved.tag, "hex"));
+  const credentials = JSON.parse(Buffer.concat([decipher.update(Buffer.from(saved.encrypted, "hex")), decipher.final()]).toString("utf8"));
+  await loginToSite(session, credentials.username, credentials.password);
+  saved.expiresAt = Date.now() + AUTO_LOGIN_MS;
+  await writeFile(file, JSON.stringify(saved), { mode: 0o600 });
+  setAutoLoginCookie(request, response, token);
+}
+
 function getRequestSession(request, response, { touch = true } = {}) {
   cleanupSessions();
   const cookies = parseCookies(request.headers.cookie || "");
@@ -368,6 +444,35 @@ async function readOrderRestrictions() {
     if (error.code === "ENOENT") return [];
     throw error;
   }
+}
+
+async function saveOrderRestrictionChange(body) {
+  const save = restrictionWriteChain.then(async () => {
+    let matches;
+    if (body.action === "add" || body.action === "remove") {
+      const [match] = normalizeOrderRestrictions([body.match]);
+      const current = await readOrderRestrictions();
+      matches = body.action === "add" ? [...new Set([...current, match])] : current.filter((entry) => entry !== match);
+    } else if (body.action !== undefined) {
+      const error = new Error("Unknown restriction action.");
+      error.status = 400;
+      throw error;
+    } else {
+      matches = normalizeOrderRestrictions(body.matches);
+    }
+    await mkdir(DATA_DIR, { recursive: true });
+    const temporaryFile = `${ORDER_RESTRICTIONS_FILE}.${crypto.randomUUID()}.tmp`;
+    try {
+      await writeFile(temporaryFile, JSON.stringify({ matches }, null, 2), "utf8");
+      await rename(temporaryFile, ORDER_RESTRICTIONS_FILE);
+      return await readOrderRestrictions();
+    } catch (error) {
+      await unlink(temporaryFile).catch(() => {});
+      throw new Error(`Could not save restrictions. Check that the server can write to its data folder. (${error.code || "storage error"})`);
+    }
+  });
+  restrictionWriteChain = save.catch(() => {});
+  return save;
 }
 
 function isOrderRestricted(username, matches) {
@@ -1397,11 +1502,7 @@ const server = http.createServer(async (request, response) => {
       if (request.method === "GET") {
         sendJson(response, 200, { matches: await readOrderRestrictions() });
       } else if (request.method === "POST") {
-        const matches = normalizeOrderRestrictions((await readJsonBody(request)).matches);
-        await mkdir(DATA_DIR, { recursive: true });
-        const temporaryFile = `${ORDER_RESTRICTIONS_FILE}.${crypto.randomUUID()}.tmp`;
-        await writeFile(temporaryFile, JSON.stringify({ matches }, null, 2), "utf8");
-        await rename(temporaryFile, ORDER_RESTRICTIONS_FILE);
+        const matches = await saveOrderRestrictionChange(await readJsonBody(request));
         sendJson(response, 200, { matches });
       } else {
         sendJson(response, 405, { error: "Method not allowed." });
@@ -1426,18 +1527,27 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/login" && request.method === "POST") {
-      const { username, password } = await readJsonBody(request);
+      const { username, password, autoLogin } = await readJsonBody(request);
       if (!username || !password) throw new Error("Username and password are required.");
       const account = await loginToSite(session, username, password);
       const wallet = parseWallet(await readProtectedPage(session, "/woo-wallet/"));
       session.walletCache = wallet;
       session.walletCachedAt = Date.now();
       await trackUsage(request, session, "login.success", { balance: wallet.balance });
-      sendJson(response, 200, { account: serializeAccount(session), balance: wallet.balance });
+      let autoLoginWarning = "";
+      try {
+        if (autoLogin === true) await saveAutoLogin(request, response, { username, password });
+        else if (autoLogin === false) await revokeAutoLogin(request, response);
+      } catch {
+        autoLoginWarning = "Login succeeded, but Auto login could not be saved. Check the server data-folder permissions.";
+      }
+      sendJson(response, 200, { account: serializeAccount(session), balance: wallet.balance, autoLoginWarning });
       return;
     }
 
     if (url.pathname === "/api/logout" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      if (body.keepAutoLogin !== true) await revokeAutoLogin(request, response);
       await trackUsage(request, session, "logout");
       session.reset();
       sendJson(response, 200, { ok: true });
@@ -1445,12 +1555,23 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/session") {
+      let autoLoginError = "";
+      try { await restoreAutoLogin(request, response, session); } catch {
+        autoLoginError = "Auto login could not connect. Please sign in again.";
+      }
       const rules = session.account ? await readNotificationRules() : [];
       sendJson(response, 200, {
         account: serializeAccount(session),
+        autoLoginError,
         idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
         notification: matchingNotification(session.account, rules)
       });
+      return;
+    }
+
+    if (url.pathname === "/api/auto-login" && request.method === "POST") {
+      await restoreAutoLogin(request, response, session);
+      sendJson(response, 200, { account: serializeAccount(session) });
       return;
     }
 

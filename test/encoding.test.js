@@ -28,7 +28,7 @@ test("Rowena login Easter egg is case-insensitive and keeps the requested copy",
 test("login failures and native password storage have visible handling", async () => {
   const app = await readFile("public/app.js", "utf8");
   const html = await readFile("public/index.html", "utf8");
-  assert.match(app, /navigator\.credentials\.store/);
+  assert.match(html, /Auto login/);
   assert.match(app, /showSystemNotification\("Login unsuccessful"/);
   assert.match(html, /id="systemNotification"/);
   assert.doesNotMatch(app, /localStorage\.setItem\([^,]+,\s*password/);

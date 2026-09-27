@@ -112,38 +112,11 @@ function clearLegacyBrowserCredentials() {
   localStorage.removeItem(LEGACY_CREDENTIALS_KEY);
 }
 
-function browserPasswordManagerAvailable() {
-  return window.isSecureContext
-    && typeof window.PasswordCredential === "function"
-    && typeof navigator.credentials?.store === "function"
-    && typeof navigator.credentials?.get === "function";
-}
-
-async function storeBrowserCredentials(username, password) {
-  if (!browserPasswordManagerAvailable()) return false;
-  await navigator.credentials.store(new PasswordCredential({
-    id: username,
-    name: username,
-    password
-  }));
-  return true;
-}
-
-async function loadBrowserCredentials() {
-  if (!browserPasswordManagerAvailable()) return null;
-  const saved = await navigator.credentials.get({
-    password: true,
-    mediation: "optional"
-  });
-  if (!saved?.id || !saved?.password) return null;
-  return { username: saved.id, password: saved.password };
-}
-
 async function rememberCredentials(username, password) {
   clearLegacyBrowserCredentials();
   if (!window.sooderingCredentials?.available) {
     localStorage.setItem(REMEMBERED_USERNAME_KEY, username);
-    return storeBrowserCredentials(username, password);
+    return true;
   }
   localStorage.removeItem(REMEMBERED_USERNAME_KEY);
   await window.sooderingCredentials.save({ username, password });
@@ -160,29 +133,13 @@ async function fillRememberedCredentials() {
   clearLegacyBrowserCredentials();
   rememberInput.disabled = false;
   const electronStorage = Boolean(window.sooderingCredentials?.available);
-  const browserStorage = browserPasswordManagerAvailable();
   rememberInput.title = electronStorage
-    ? "Store the login using operating-system encryption."
-    : browserStorage
-      ? "Store the login in your browser password manager."
-      : "Remember the email. Secure password saving requires HTTPS and browser password-manager support.";
+    ? "Automatically sign in when you reopen this app. Signing out turns Auto login off."
+    : "Automatically sign in when you return using this browser. Signing out turns Auto login off.";
   rememberHelp.textContent = rememberInput.title;
   if (!window.sooderingCredentials?.available) {
     const username = localStorage.getItem(REMEMBERED_USERNAME_KEY) || "";
-    let saved = null;
-    if (username) {
-      try {
-        saved = await loadBrowserCredentials();
-      } catch {
-        saved = null;
-      }
-    }
-    if (saved?.username && saved.username.toLowerCase() === username.toLowerCase()) {
-      usernameInput.value = saved.username;
-      passwordInput.value = saved.password;
-    } else if (username) {
-      usernameInput.value = username;
-    }
+    if (username) usernameInput.value = username;
     rememberInput.checked = Boolean(username);
     return;
   }
@@ -198,14 +155,7 @@ async function fillRememberedCredentials() {
 
 async function getRememberedCredentials() {
   if (!window.sooderingCredentials?.available) {
-    const rememberedUsername = localStorage.getItem(REMEMBERED_USERNAME_KEY) || "";
-    if (!rememberedUsername) return null;
-    try {
-      const saved = await loadBrowserCredentials();
-      return saved?.username.toLowerCase() === rememberedUsername.toLowerCase() ? saved : null;
-    } catch {
-      return null;
-    }
+    return null;
   }
   try {
     const saved = await window.sooderingCredentials.load() || {};
@@ -245,6 +195,13 @@ async function api(path, options = {}) {
 }
 
 async function loginWithRememberedCredentials() {
+  if (!window.sooderingCredentials?.available) {
+    const data = await api("/api/auto-login", { method: "POST", body: "{}" });
+    if (!data.account) return false;
+    state.account = data.account;
+    renderAccount();
+    return true;
+  }
   const saved = await getRememberedCredentials();
   if (!saved) return false;
 
@@ -666,17 +623,17 @@ function selectedItems() {
   return [...state.selections.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function weekdayProductsForStall(stallName) {
+function weekdayProductsForStalls(stallNames) {
   if (!state.data) return [];
   const excludedItems = new RegExp(state.config.quickOrderExcludedItems, "i");
   return state.data.days
     .filter((day) => isWeekday(day.date))
     .filter((day) => !state.orderedDates?.has(day.date))
-    .map((day) => day.products.find((product) => {
+    .map((day) => stallNames.map((stallName) => day.products.find((product) => {
       const productName = `${product.title} ${product.item}`;
       return product.stall.toLowerCase() === stallName.toLowerCase()
         && !excludedItems.test(productName);
-    }))
+    })).find(Boolean))
     .filter(Boolean);
 }
 
@@ -867,7 +824,7 @@ async function submitProducts(products, successMessage) {
   await refreshAccountData({ includeOrders: true, forceOrders: true, forceWallet: true });
 }
 
-async function quickOrder(stallName) {
+async function quickOrder(label, stallNames) {
   if (!state.data) {
     cartStatus.textContent = "Menu is still loading. Try again in a moment.";
     return;
@@ -878,20 +835,20 @@ async function quickOrder(stallName) {
     await loadOrders();
   }
 
-  const products = weekdayProductsForStall(stallName);
+  const products = weekdayProductsForStalls(stallNames);
   if (products.length === 0) {
-    cartStatus.textContent = `No unordered weekday ${stallName} items are available after skipping Economic Rice and Nasi Padang.`;
+    cartStatus.textContent = `No eligible unordered weekday meals are available for ${label}.`;
     return;
   }
 
-  const summary = products.map((item) => `${formatDate(item.date)}: ${item.item} ${item.price}`).join("\n");
-  const confirmed = window.confirm(`Quick order ${stallName} for ${products.length} weekday${products.length === 1 ? "" : "s"}?\n\n${summary}\n\nTime: ${state.config.defaultTimeSlots[0]}`);
+  const summary = products.map((item) => `${formatDate(item.date)}: ${item.stall} - ${item.item} ${item.price}`).join("\n");
+  const confirmed = window.confirm(`${label} for ${products.length} weekday${products.length === 1 ? "" : "s"}?\n\n${summary}\n\nTime: ${state.config.defaultTimeSlots[0]}`);
   if (!confirmed) return;
 
-  setOrderingProgress(true, `Ordering ${stallName} weekdays...`);
+  setOrderingProgress(true, `${label}: ordering weekdays...`);
 
   try {
-    await submitProducts(products, `${stallName} weekday orders placed successfully.`);
+    await submitProducts(products, `${label} placed successfully.`);
   } catch (error) {
     cartStatus.textContent = error.message || "Quick order failed. Please refresh and try again.";
   } finally {
@@ -1051,8 +1008,6 @@ async function loadUsage({ force = false } = {}) {
   try {
     const data = await api("/api/usage?limit=100", { headers: {} });
     renderNotificationRules(data.rules);
-    const restrictions = await api("/api/admin/order-restrictions", { headers: {} });
-    document.querySelector("#orderRestrictionsInput").value = restrictions.matches.join("\n");
     state.usageLoaded = true;
     renderUsage(data.entries || []);
   } catch (error) {
@@ -1076,6 +1031,7 @@ async function loadSession() {
   const data = await api("/api/session", { headers: {} });
   if (data.idleTimeoutMs) state.config.sessionIdleTimeoutMs = data.idleTimeoutMs;
   state.account = data.account;
+  if (data.autoLoginError) accountStatus.textContent = data.autoLoginError;
   if (!state.account) {
     await loginWithRememberedCredentials();
   }
@@ -1103,6 +1059,11 @@ function resetSignedOutState(message = "Sign in to order lunch.") {
   state.ordersLoading = false;
   state.usageLoaded = false;
   state.usageLoading = false;
+  restrictionsLoaded = false;
+  restrictionInput.value = "";
+  restrictionList.innerHTML = "";
+  restrictionStatus.textContent = "";
+  setRestrictionsBusy(restrictionsBusy);
   accountStatus.textContent = message;
   renderAccount();
   walletBalance.textContent = "-";
@@ -1116,16 +1077,17 @@ function resetSignedOutState(message = "Sign in to order lunch.") {
   renderBasket();
 }
 
-async function logout({ message, notifyServer = true } = {}) {
+async function logout({ message, notifyServer = true, keepAutoLogin = false } = {}) {
   clearTimeout(state.idleTimer);
   if (notifyServer) {
     try {
-      await api("/api/logout", { method: "POST", body: "{}" });
+      await api("/api/logout", { method: "POST", body: JSON.stringify({ keepAutoLogin }) });
     } catch {
       // Local state must still be cleared when the server session has expired.
     }
   }
   resetSignedOutState(message);
+  if (!keepAutoLogin) await forgetCredentials();
   await fillRememberedCredentials();
 }
 
@@ -1134,7 +1096,7 @@ function scheduleIdleTimeout() {
   if (!state.account) return;
   const remaining = Math.max(0, state.config.sessionIdleTimeoutMs - (Date.now() - state.lastActivityAt));
   state.idleTimer = setTimeout(() => {
-    logout({ message: "Signed out after being inactive for too long." });
+    logout({ message: "Signed out after being inactive for too long.", keepAutoLogin: true });
   }, remaining);
 }
 
@@ -1173,6 +1135,7 @@ tabButtons.forEach((button) => {
       loadOrders();
     } else if (state.activeTab === "usage") {
       loadUsage();
+      loadOrderRestrictions();
     }
   });
 });
@@ -1199,21 +1162,19 @@ loginForm.addEventListener("submit", async (event) => {
       method: "POST",
       body: JSON.stringify({
         username,
-        password
+        password,
+        autoLogin: rememberInput.checked
       })
     });
-    let credentialWarning = "";
+    let credentialWarning = data.autoLoginWarning || "";
     try {
       if (rememberInput.checked) {
-        const passwordStored = await rememberCredentials(username, password);
-        if (!passwordStored && !window.sooderingCredentials?.available) {
-          credentialWarning = "Your email was remembered, but this browser cannot securely save the password on this connection. Use HTTPS and enable the browser password manager.";
-        }
+        await rememberCredentials(username, password);
       } else {
         await forgetCredentials();
       }
     } catch {
-      credentialWarning = "Login succeeded, but the password could not be saved by the credential manager.";
+      credentialWarning = "Login succeeded, but Auto login could not be saved on this device.";
     }
     state.account = data.account;
     if (data.balance) renderWallet({ balance: data.balance });
@@ -1223,7 +1184,7 @@ loginForm.addEventListener("submit", async (event) => {
       refreshAccountData({ includeOrders: true });
     });
     if (credentialWarning) {
-      showSystemNotification("Password not saved", credentialWarning, { tone: "warning", timeout: 12000 });
+      showSystemNotification("Auto login not saved", credentialWarning, { tone: "warning", timeout: 12000 });
     }
   } catch (error) {
     accountStatus.textContent = error.message;
@@ -1239,27 +1200,79 @@ logoutButton.addEventListener("click", async () => {
 
 usageRefreshButton.addEventListener("click", () => loadUsage({ force: true }));
 
-document.querySelector("#orderRestrictionsForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const button = document.querySelector("#saveOrderRestrictionsButton");
-  const status = document.querySelector("#orderRestrictionsStatus");
-  const input = document.querySelector("#orderRestrictionsInput");
-  button.disabled = true;
-  status.textContent = "Saving restrictions...";
+let restrictionsBusy = false;
+let restrictionsLoaded = false;
+const restrictionInput = document.querySelector("#orderRestrictionsInput");
+const restrictionList = document.querySelector("#orderRestrictionsList");
+const restrictionStatus = document.querySelector("#orderRestrictionsStatus");
+
+function setRestrictionsBusy(busy) {
+  restrictionsBusy = busy;
+  restrictionInput.disabled = busy || !restrictionsLoaded;
+  document.querySelector("#saveOrderRestrictionsButton").disabled = busy || !restrictionsLoaded;
+  document.querySelector("#refreshOrderRestrictionsButton").disabled = busy;
+  restrictionList.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
+}
+
+function renderOrderRestrictions(matches) {
+  restrictionList.innerHTML = matches.map((match) => `
+    <div class="restriction-row">
+      <div><strong>${escapeHtml(match)}</strong><p class="meta">Ordering access restricted</p></div>
+      <button class="secondary" type="button" data-restore-match="${escapeHtml(match)}">Restore access</button>
+    </div>
+  `).join("") || '<p class="empty-state">No restricted users. Everyone can place orders.</p>';
+}
+
+async function loadOrderRestrictions() {
+  if (!canViewUsage() || restrictionsBusy) return;
+  setRestrictionsBusy(true);
+  restrictionStatus.dataset.tone = "";
+  restrictionStatus.textContent = "Loading saved restrictions...";
   try {
-    const matches = input.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
-    const data = await api("/api/admin/order-restrictions", {
-      method: "POST",
-      body: JSON.stringify({ matches })
-    });
-    input.value = data.matches.join("\n");
-    status.textContent = "Restrictions saved. Remove a line and save to restore that user's access.";
+    const data = await apiWithRelogin("/api/admin/order-restrictions", { headers: {} }, null);
+    if (!canViewUsage()) return;
+    renderOrderRestrictions(data.matches);
+    restrictionsLoaded = true;
+    restrictionStatus.textContent = `${data.matches.length} saved restriction${data.matches.length === 1 ? "" : "s"}.`;
   } catch (error) {
-    status.textContent = error.message;
+    restrictionStatus.dataset.tone = "error";
+    restrictionStatus.textContent = `Could not load restrictions: ${error.message}`;
   } finally {
-    button.disabled = false;
+    setRestrictionsBusy(false);
   }
+}
+
+async function updateOrderRestriction(action, match) {
+  if (restrictionsBusy || !restrictionsLoaded || !canViewUsage()) return;
+  setRestrictionsBusy(true);
+  restrictionStatus.dataset.tone = "";
+  restrictionStatus.textContent = action === "add" ? "Saving restriction..." : "Restoring access...";
+  try {
+    const data = await apiWithRelogin("/api/admin/order-restrictions", {
+      method: "POST", body: JSON.stringify({ action, match })
+    }, null);
+    renderOrderRestrictions(data.matches);
+    if (action === "add") restrictionInput.value = "";
+    restrictionStatus.dataset.tone = "success";
+    restrictionStatus.textContent = action === "add" ? `Saved. Emails containing “${match}” cannot place orders.` : `Access restored for “${match}”.`;
+  } catch (error) {
+    restrictionStatus.dataset.tone = "error";
+    restrictionStatus.textContent = `Change was not saved: ${error.message}`;
+  } finally {
+    setRestrictionsBusy(false);
+  }
+}
+
+document.querySelector("#orderRestrictionsForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const match = restrictionInput.value.trim();
+  if (match) updateOrderRestriction("add", match);
 });
+restrictionList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-restore-match]");
+  if (button) updateOrderRestriction("remove", button.dataset.restoreMatch);
+});
+document.querySelector("#refreshOrderRestrictionsButton").addEventListener("click", loadOrderRestrictions);
 rowenaEditorForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   saveRowenaMessageButton.disabled = true;
@@ -1359,8 +1372,8 @@ clearSelectionButton.addEventListener("click", () => {
   renderBasket();
 });
 
-quickChineseButton.addEventListener("click", () => quickOrder("Chinese Stall"));
-quickMalayButton.addEventListener("click", () => quickOrder("Malay Stall"));
+quickChineseButton.addEventListener("click", () => quickOrder("Quick Non Halal Order", ["Chinese Stall", "International Stall", "Malay Stall"]));
+quickMalayButton.addEventListener("click", () => quickOrder("Quick Halal Weekday", ["Malay Stall", "International Stall"]));
 
 placeOrderButton.addEventListener("click", async () => {
   const selections = selectedItems();
