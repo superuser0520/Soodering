@@ -832,11 +832,12 @@ async function placeOrder(session, { timeSlot = "", notes = "", includeOrders = 
     throw error;
   }
 
-  return {
+  const result = {
     result: payload.result,
     redirect: payload.redirect || "",
     ...(includeOrders ? await refreshOrdersAfterCheckout(session) : {})
   };
+  return result;
 }
 
 async function refreshOrdersAfterCheckout(session) {
@@ -980,11 +981,12 @@ async function placeBulkOrder(session, { selections = [], timeSlot = "", notes =
       });
     }
 
-    return {
+    const result = {
       result: "success",
       placed: results,
       ...await refreshOrdersAfterCheckout(session)
     };
+    return result;
   } finally {
     try {
       await clearCart(session);
