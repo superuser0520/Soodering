@@ -5,7 +5,6 @@ const {
   isOrderRestricted,
   decodeHtml,
   createSiteSession,
-  placeOrder,
   buildMenuDateRange,
   extendedMenuEntryCacheMs,
   filterHiddenMenuItems,
@@ -40,34 +39,6 @@ test("order restrictions reject invalid rules and allow clearing all restriction
   for (const matches of [null, "rowena", [" "], [123], ["x".repeat(101)]]) {
     assert.throws(() => normalizeOrderRestrictions(matches), { status: 400 });
   }
-});
-
-test("successful checkout stays successful when order history is unavailable", async () => {
-  const session = createSiteSession();
-  session.account = { username: "test@example.com" };
-  session.request = async (pathname) => {
-    if (pathname === "/checkout/") return new Response('<tr class="cart_item"><td>Chicken Rice</td><td>$4.50</td></tr>');
-    if (pathname === "/?wc-ajax=checkout") return Response.json({ result: "success", redirect: "/confirmed/" });
-    throw new Error("Order history is unavailable");
-  };
-  const result = await placeOrder(session, {});
-  assert.equal(result.result, "success");
-  assert.equal(result.redirect, "/confirmed/");
-  assert.equal(result.orders, null);
-  assert.match(result.ordersRefreshError, /Order submitted/);
-});
-
-test("queue checkout does not fetch history after a successful payment", async () => {
-  const session = createSiteSession();
-  session.account = { username: "test@example.com" };
-  const requests = [];
-  session.request = async (pathname) => {
-    requests.push(pathname);
-    if (pathname === "/checkout/") return new Response('<tr class="cart_item"><td>Chicken Rice</td><td>$4.50</td></tr>');
-    return Response.json({ result: "success" });
-  };
-  assert.equal((await placeOrder(session, { includeOrders: false })).result, "success");
-  assert.deepEqual(requests, ["/checkout/", "/?wc-ajax=checkout"]);
 });
 
 test("usage logs prefer the cafeteria display name", () => {

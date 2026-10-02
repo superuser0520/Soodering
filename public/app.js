@@ -30,9 +30,6 @@ const state = {
   orderKeys: new Map(),
   failedOrderProducts: [],
   isOrdering: false,
-  ordering: false,
-  orderingAccount: null,
-  jobMonitor: 0,
   rowenaNotificationKey: null,
   leaveDays: 0,
   leaveDaysAccountKey: null
@@ -195,11 +192,7 @@ async function api(path, options = {}) {
   } catch {
     throw new Error(text || "The server returned an unreadable response.");
   }
-  if (!response.ok) {
-    const error = new Error(data.error || "Request failed");
-    error.status = response.status;
-    throw error;
-  }
+  if (!response.ok) throw new Error(data.error || "Request failed");
   return data;
 }
 
@@ -533,7 +526,12 @@ function renderAccount() {
     loginScreen.hidden = true;
     appScreen.hidden = false;
     const accountKey = String(state.account.username || state.account.name || "account").toLowerCase();
-    syncLeaveDays(creditCycle());
+    if (state.leaveDaysAccountKey !== accountKey) {
+      state.leaveDaysAccountKey = accountKey;
+      state.leaveDays = Math.max(0, Math.floor(Number(localStorage.getItem(`soodering.leaveDays.${accountKey}`) || 0)));
+      leaveDaysInput.value = String(state.leaveDays);
+      renderCredit();
+    }
     showRowenaNotification();
   } else {
     accountStatus.textContent = "Sign in to order lunch.";
@@ -664,8 +662,6 @@ function setMenuLoading(isLoading, message) {
 function setOrderingProgress(isOrdering, message) {
   state.isOrdering = isOrdering;
   document.querySelector("#retryFailedOrdersButton").disabled = isOrdering;
-  state.ordering = isOrdering;
-  state.orderingAccount = isOrdering ? accountStorageKey() : null;
   placeOrderButton.disabled = isOrdering || selectedItems().length === 0;
   quickChineseButton.disabled = isOrdering;
   quickMalayButton.disabled = isOrdering;
@@ -765,128 +761,12 @@ function renderNotificationRules(rules) {
   (rules || []).forEach(addNotificationRule);
 }
 
-function orderOperationKey(body) {
-  const selectionKey = JSON.stringify({
-    account: accountStorageKey(),
-    selections: body.selections.map(({ date, productId, quantity }) => ({ date, productId: String(productId), quantity })),
-    timeSlot: body.timeSlot,
-    notes: body.notes
-  });
+function orderOperationKey(item) {
+  const selectionKey = `${item.date}|${item.id}`;
   if (!state.orderKeys.has(selectionKey)) {
     state.orderKeys.set(selectionKey, crypto.randomUUID().replaceAll("-", ""));
   }
   return state.orderKeys.get(selectionKey);
-}
-
-function accountStorageKey() {
-  return String(state.account?.username || state.account?.name || "account").toLowerCase();
-}
-
-function activeJobStorageKey() {
-  return `soodering.activeOrderJob.${accountStorageKey()}`;
-}
-
-async function monitorOrderJob(job, progressItems, successMessage) {
-  const monitor = ++state.jobMonitor;
-  const accountKey = accountStorageKey();
-  const storageKey = activeJobStorageKey();
-  const isCurrent = () => monitor === state.jobMonitor && state.account && accountStorageKey() === accountKey;
-  setOrderingProgress(true);
-  try {
-    while (isCurrent()) {
-      const jobItems = new Map(job.items.map((item) => [`${item.date}|${item.productId}`, item]));
-      progressItems.forEach((item) => {
-        const queued = jobItems.get(`${item.date}|${item.id}`);
-        if (!queued) return;
-        item.status = queued.status;
-        const labels = { done: "Ordered", ordering: "Ordering", verifying: "Checking", retrying: "Retrying", failed: "Failed", needs_review: "Check orders" };
-        item.label = labels[queued.status] || "Queued";
-        item.message = queued.message;
-      });
-      const active = ["queued", "running"].includes(job.status);
-      renderOrderProgress(progressItems, { active });
-      if (!active) break;
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      if (!isCurrent()) return;
-      try {
-        job = (await apiWithRelogin(`/api/order/job?id=${encodeURIComponent(job.id)}`, { headers: {} })).job;
-      } catch (error) {
-        if (!isCurrent()) return;
-        if (error.status === 404) {
-          localStorage.removeItem(storageKey);
-          throw new Error("Saved ordering progress is no longer available. Check your orders before submitting again.");
-        }
-        cartStatus.textContent = "Unable to refresh progress. Your accepted queue may still be running; reconnecting...";
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
-    }
-    if (!isCurrent()) return;
-    localStorage.removeItem(storageKey);
-    job.placed.forEach((item) => {
-      if (state.selections.get(item.date)?.id === String(item.productId)) state.selections.delete(item.date);
-    });
-    state.orderKeys.clear();
-    const placedKeys = new Set(job.placed.map((item) => `${item.date}|${item.productId}`));
-    state.failedOrderProducts = progressItems.filter((item) => !placedKeys.has(`${item.date}|${item.id}`));
-    const retryButton = document.querySelector("#retryFailedOrdersButton");
-    retryButton.hidden = state.failedOrderProducts.length === 0;
-    retryButton.textContent = `Retry ${state.failedOrderProducts.length} failed date${state.failedOrderProducts.length === 1 ? "" : "s"}`;
-    const reviewCount = progressItems.filter((item) => item.status === "needs_review").length;
-    if (job.failed.some((item) => item.error === "Request access usage from the admin.")) {
-      showOrderAccessWarning({ partial: job.placed.length > 0 });
-    }
-    renderBasket();
-    const resultMessage = job.failed.length
-      ? `${job.placed.length} ordered, ${job.failed.length - reviewCount} failed${reviewCount ? `, ${reviewCount} need checking` : ""}. Check the progress list.`
-      : successMessage;
-    cartStatus.textContent = resultMessage;
-    try {
-      await refreshAccountData({ includeOrders: true, forceOrders: true, forceWallet: true });
-      cartStatus.textContent = resultMessage;
-    } catch {
-      cartStatus.textContent = `${resultMessage} Account refresh failed; refresh Upcoming orders to check.`;
-    }
-  } finally {
-    if (isCurrent()) setOrderingProgress(false);
-  }
-}
-
-async function resumeOrderJob() {
-  if (!state.account || (state.ordering && state.orderingAccount === accountStorageKey())) return;
-  const storageKey = activeJobStorageKey();
-  const saved = localStorage.getItem(storageKey);
-  const legacyId = localStorage.getItem("sooderingActiveOrderJob");
-  if (!saved && !legacyId) return;
-  const accountKey = accountStorageKey();
-  const monitor = ++state.jobMonitor;
-  const isCurrent = () => monitor === state.jobMonitor && state.account && accountStorageKey() === accountKey;
-  setOrderingProgress(true, "Restoring your accepted order queue...");
-  try {
-    const record = saved ? JSON.parse(saved) : { id: legacyId };
-    let job;
-    while (isCurrent() && !job) {
-      try {
-        job = (await api(`/api/order/job?id=${encodeURIComponent(record.id)}`, { headers: {} })).job;
-      } catch (error) {
-        if (error.status === 404 || error.status === 401) throw error;
-        if (!isCurrent()) return;
-        cartStatus.textContent = "Unable to restore progress yet. Reconnecting to your accepted queue...";
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
-    }
-    if (!isCurrent()) return;
-    const products = record.products || job.items.map((item) => ({ date: item.date, id: item.productId, stall: "Meal", item: `#${item.productId}` }));
-    localStorage.setItem(storageKey, JSON.stringify({ id: job.id, products }));
-    if (legacyId) localStorage.removeItem("sooderingActiveOrderJob");
-    cartStatus.textContent = "Restored your accepted order queue.";
-    await monitorOrderJob(job, progressItemsFor(products), "Order queue completed.");
-  } catch (error) {
-    if (!state.account || accountStorageKey() !== accountKey) return;
-    if (error.status === 404 || error instanceof SyntaxError) localStorage.removeItem(storageKey);
-    if (error.status === 404 && legacyId) localStorage.removeItem("sooderingActiveOrderJob");
-    cartStatus.textContent = `${error.message} Check your orders before submitting again.`;
-    setOrderingProgress(false);
-  }
 }
 
 async function submitProducts(products, successMessage) {
@@ -899,17 +779,16 @@ async function submitProducts(products, successMessage) {
   renderOrderProgress(progressItems, { active: true });
   cartStatus.textContent = `Sending ${products.length} date${products.length === 1 ? "" : "s"} to the server queue...`;
 
-  const body = {
-    selections: products.map((item) => ({ productId: item.id, date: item.date, quantity: 1 })),
-    timeSlot: state.config.defaultTimeSlots[0],
-    notes: ""
-  };
-  body.idempotencyKey = `queue_${orderOperationKey(body)}`;
   let response;
   try {
     response = await apiWithRelogin("/api/order/queue", {
     method: "POST",
-    body: JSON.stringify(body)
+    body: JSON.stringify({
+      selections: products.map((item) => ({ productId: item.id, date: item.date, quantity: 1 })),
+      timeSlot: state.config.defaultTimeSlots[0],
+      notes: "",
+      idempotencyKey: `queue_${orderOperationKey(products[0])}_${products.length}`
+    })
     });
   } catch (error) {
     progressItems.forEach((item) => {
@@ -926,12 +805,65 @@ async function submitProducts(products, successMessage) {
     throw error;
   }
   const jobId = response.job.id;
-  localStorage.setItem(activeJobStorageKey(), JSON.stringify({ id: jobId, products }));
+  localStorage.setItem("sooderingActiveOrderJob", jobId);
   const acceptedMessage = `Orders for ${products.length} selected date${products.length === 1 ? "" : "s"} are accepted. You can close this browser.`;
   cartStatus.textContent = acceptedMessage;
   showSystemNotification("Orders accepted", acceptedMessage, { tone: "success", timeout: 30000 });
 
-  await monitorOrderJob(response.job, progressItems, successMessage);
+  let job = response.job;
+  const applyJobProgress = () => {
+    const jobItems = new Map(job.items.map((item) => [`${item.date}|${item.productId}`, item]));
+    const labels = { done: "Ordered", ordering: "Ordering", verifying: "Checking", retrying: "Retrying", failed: "Failed", needs_review: "Check orders" };
+    progressItems.forEach((item) => {
+      const queued = jobItems.get(`${item.date}|${item.id}`);
+      if (!queued) return;
+      item.status = queued.status;
+      item.label = labels[queued.status] || "Queued";
+      item.message = queued.message;
+    });
+    renderOrderProgress(progressItems, { active: ["queued", "running"].includes(job.status) });
+  };
+  applyJobProgress();
+  while (["queued", "running"].includes(job.status)) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    job = (await apiWithRelogin(`/api/order/job?id=${encodeURIComponent(jobId)}`, { headers: {} })).job;
+    applyJobProgress();
+  }
+
+  localStorage.removeItem("sooderingActiveOrderJob");
+  const placedKeys = new Set(job.placed.map((item) => `${item.date}|${item.productId}`));
+  progressItems.forEach((item) => {
+    const key = `${item.date}|${item.id}`;
+    if (placedKeys.has(key)) {
+      state.selections.delete(item.date);
+    }
+    // A deliberate retry needs a fresh operation ID. Keep IDs unchanged while
+    // the request or job outcome is still unknown, so network retries deduplicate.
+    state.orderKeys.delete(key);
+  });
+  state.failedOrderProducts = products.filter((item) => !placedKeys.has(`${item.date}|${item.id}`));
+  const retryButton = document.querySelector("#retryFailedOrdersButton");
+  retryButton.hidden = state.failedOrderProducts.length === 0;
+  retryButton.textContent = `Retry ${state.failedOrderProducts.length} failed date${state.failedOrderProducts.length === 1 ? "" : "s"}`;
+  const successCount = job.placed.length;
+  const failureCount = job.failed.length;
+  const reviewCount = progressItems.filter((item) => item.status === "needs_review").length;
+  if (job.failed.some((item) => item.error === "Request access usage from the admin.")) {
+    showOrderAccessWarning({ partial: successCount > 0 });
+  }
+
+  const resultMessage = failureCount
+    ? `${successCount} ordered, ${failureCount - reviewCount} failed${reviewCount ? `, ${reviewCount} need checking` : ""}. Check the progress list.`
+    : successMessage;
+  renderBasket();
+  cartStatus.textContent = resultMessage;
+  renderOrderProgress(progressItems);
+  try {
+    await refreshAccountData({ includeOrders: true, forceOrders: true, forceWallet: true });
+    cartStatus.textContent = resultMessage;
+  } catch {
+    cartStatus.textContent = `${resultMessage} Account refresh failed; refresh Upcoming orders to check.`;
+  }
 }
 
 async function quickOrder(label, stallNames) {
@@ -999,7 +931,6 @@ function renderCredit() {
   }
 
   const cycle = creditCycle();
-  syncLeaveDays(cycle);
   const upcomingSpend = highestOrderSpendPerDate(state.upcomingOrders, cycle);
   const leaveDays = Math.min(cycle.workingDays, Math.max(0, Math.floor(Number(state.leaveDays) || 0)));
   const leaveDeduction = leaveDays * cycle.dailyCredit;
@@ -1015,15 +946,6 @@ function renderCredit() {
   leaveDaysInput.max = String(cycle.workingDays);
   leaveDaysInput.value = String(leaveDays);
   leaveDaysDeduction.textContent = leaveDays ? `${formatMoney(leaveDeduction)} estimated deduction` : "No leave deduction";
-}
-
-function syncLeaveDays(cycle) {
-  const key = `soodering.leaveDays.${accountStorageKey()}.${cycle.start}`;
-  if (state.leaveDaysAccountKey !== key) {
-    state.leaveDaysAccountKey = key;
-    state.leaveDays = Math.min(cycle.workingDays, Math.max(0, Math.floor(Number(localStorage.getItem(key)) || 0)));
-    leaveDaysInput.value = String(state.leaveDays);
-  }
 }
 
 function renderMenus() {
@@ -1160,13 +1082,10 @@ async function loadSession() {
   recordActivity();
   afterFirstPaint(() => {
     refreshAccountData({ includeOrders: true });
-    resumeOrderJob();
   });
 }
 
 function resetSignedOutState(message = "Sign in to order lunch.") {
-  state.jobMonitor += 1;
-  setOrderingProgress(false);
   state.account = null;
   state.rowenaNotificationKey = null;
   state.leaveDays = 0;
@@ -1307,7 +1226,6 @@ loginForm.addEventListener("submit", async (event) => {
     renderAccount();
     afterFirstPaint(() => {
       refreshAccountData({ includeOrders: true });
-      resumeOrderJob();
     });
     if (credentialWarning) {
       showSystemNotification("Auto login not saved", credentialWarning, { tone: "warning", timeout: 12000 });
@@ -1433,12 +1351,11 @@ dismissRowenaNotification.addEventListener("click", attemptRowenaNotificationDis
 dismissSystemNotification.addEventListener("click", hideSystemNotification);
 leaveDaysInput.addEventListener("input", () => {
   if (!state.account) return;
-  const enteredDays = Number(leaveDaysInput.value) || 0;
   const cycle = creditCycle();
-  syncLeaveDays(cycle);
-  state.leaveDays = Math.min(cycle.workingDays, Math.max(0, Math.floor(enteredDays)));
+  state.leaveDays = Math.min(cycle.workingDays, Math.max(0, Math.floor(Number(leaveDaysInput.value) || 0)));
   leaveDaysInput.value = String(state.leaveDays);
-  localStorage.setItem(state.leaveDaysAccountKey, String(state.leaveDays));
+  const accountKey = String(state.account.username || state.account.name || "account").toLowerCase();
+  localStorage.setItem(`soodering.leaveDays.${accountKey}`, String(state.leaveDays));
   renderCredit();
 });
 
