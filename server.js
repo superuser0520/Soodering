@@ -1676,6 +1676,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/api/admin/release-test-email") {
+      await ensureLoggedIn(session);
+      assertUsageAdmin(session);
+      if (request.method !== "POST") {
+        sendJson(response, 405, { error: "Method not allowed." });
+        return;
+      }
+      sendJson(response, 200, await releaseNotifications.sendTest(session.account));
+      return;
+    }
+
     if (url.pathname === "/api/menus") {
       const force = url.searchParams.get("refresh") === "1";
       const menus = await loadMenus(force);

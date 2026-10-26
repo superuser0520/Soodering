@@ -49,6 +49,22 @@ const accountStatus = document.querySelector("#accountStatus");
 const signedInLabel = document.querySelector("#signedInLabel");
 const loginButton = document.querySelector("#loginButton");
 const logoutButton = document.querySelector("#logoutButton");
+const releaseTestEmailButton = document.querySelector("#releaseTestEmailButton");
+const releaseTestEmailStatus = document.querySelector("#releaseTestEmailStatus");
+releaseTestEmailButton.addEventListener("click", async () => {
+  if (releaseTestEmailButton.disabled || !canViewUsage()) return;
+  const username = state.account?.username;
+  releaseTestEmailButton.disabled = true;
+  releaseTestEmailStatus.textContent = "Sending test email...";
+  try {
+    const result = await api("/api/admin/release-test-email", { method: "POST", body: "{}" });
+    if (state.account?.username === username) releaseTestEmailStatus.textContent = result.message;
+  } catch (error) {
+    if (state.account?.username === username) releaseTestEmailStatus.textContent = error.message;
+  } finally {
+    releaseTestEmailButton.disabled = false;
+  }
+});
 const releaseSubscriptionPanel = document.querySelector("#releaseSubscriptionPanel");
 const releaseSubscriptionButton = document.querySelector("#releaseSubscriptionButton");
 const releaseSubscriptionStatus = document.querySelector("#releaseSubscriptionStatus");

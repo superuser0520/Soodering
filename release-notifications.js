@@ -27,8 +27,29 @@ function createReleaseNotifications({ file, webhookUrl, fetchImpl = fetch,
     await rename(temporary, file);
   }
   const keyFor = (account) => crypto.createHash("sha256").update(account.username.toLowerCase()).digest("hex");
+  async function sendEmail(payload) {
+    const response = await fetchImpl(webhookUrl, {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(60000),
+      headers: { "content-type": "application/json" }, body: JSON.stringify(payload)
+    });
+    await response.body?.cancel();
+    return response;
+  }
   return {
     enabled,
+    sendTest: async (account) => {
+      if (!enabled) throw Object.assign(new Error("Email notifications are not configured. Set POWER_AUTOMATE_RELEASE_URL on the server and restart the service."), { status: 503 });
+      let response;
+      try {
+        response = await sendEmail({ email: account.username, username: account.name || account.username,
+          subject: "SooDering: test email",
+          message: "This is a manual test of SooDering new menu email notifications.\n\nIf you received this email, your Power Automate email connection is working.\n\nNo new lunch release is being announced by this test." });
+      } catch {
+        throw Object.assign(new Error("The test email response could not be confirmed. Check Power Automate run history and your inbox before trying again."), { status: 502 });
+      }
+      if (!response.ok) throw Object.assign(new Error(`Power Automate rejected the test email (HTTP ${response.status}). Check the trigger URL and flow run history.`), { status: 502 });
+      return { message: `Power Automate accepted the test email request for ${account.username}. Check your inbox and flow run history.` };
+    },
     status: (account) => serial(async () => ({ enabled, subscribed: Boolean((await read()).subscribers[keyFor(account)]?.active) })),
     hasSubscribers: () => serial(async () => Object.values((await read()).subscribers).some((entry) => entry.active)),
     subscribe: (account, active, days) => serial(async () => {
@@ -64,16 +85,12 @@ function createReleaseNotifications({ file, webhookUrl, fetchImpl = fetch,
           timeZone: "Asia/Singapore", weekday: "short", day: "numeric", month: "short", year: "numeric"
         }).format(new Date(`${date}T12:00:00+08:00`)));
         try {
-          const response = await fetchImpl(webhookUrl, {
-            method: "POST", redirect: "error", signal: AbortSignal.timeout(60000),
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ email: entry.email, username: entry.username,
+          const response = await sendEmail({ email: entry.email, username: entry.username,
               subject: "SooDering: new lunch orders available",
-              message: `New lunch orders are now available for:\n\n${labels.join("\n")}\n\nSign in to SooDering to view the menus and place your orders.` })
+              message: `New lunch orders are now available for:\n\n${labels.join("\n")}\n\nSign in to SooDering to view the menus and place your orders.`
           });
           delivery.status = response.ok ? "accepted" : "failed";
           delivery.httpStatus = response.status;
-          await response.body?.cancel();
         } catch {
           delivery.status = "unknown";
         }

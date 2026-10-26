@@ -64,6 +64,8 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 
 ### New lunch date email alerts (online server)
 
+The admin can open **Usage → Test email notifications → Send test email** to send a clearly labeled test to their own signed-in email address. No subscription is required, and tests do not change release notification history. The page reports whether Power Automate accepted the request or returned an error; acceptance does not confirm inbox delivery.
+
 Set `POWER_AUTOMATE_RELEASE_URL` in the Pi server's `.env` to the signed Power Automate HTTP trigger URL, then restart `soodering.service`. Keep the URL out of source control. Desktop installations do not enable this feature.
 
 Signed-in users can click **Subscribe** under **New menu alerts**, or **Unsubscribe** to stop. The recipient is the signed-in cafeteria account email; users cannot supply another recipient. Available dates at subscription time form the baseline and do not generate emails. Newly discovered dates with visible menu items generate one email per subscriber listing those dates. Dates use Singapore time. Repeated refreshes, disappearing/reappearing menus, and server restarts do not resend the same dates.

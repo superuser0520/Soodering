@@ -86,3 +86,24 @@ test("unconfigured email and invalid recipient accounts cannot subscribe", async
   const configured = await fixture(t);
   await assert.rejects(configured.service.subscribe({ username: "invalid" }, true, []), { status: 400 });
 });
+
+test("manual email targets the admin and leaves release subscription records untouched", async (t) => {
+  const { service, sent } = await fixture(t);
+  await service.subscribe(account, true, []);
+  const result = await service.sendTest(account);
+  assert.match(result.message, /accepted/);
+  assert.equal(sent[0].email, account.username);
+  assert.equal(sent[0].subject, "SooDering: test email");
+  await service.observe(days("2026-11-03"));
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].subject, "SooDering: new lunch orders available");
+});
+
+test("manual email reports missing configuration, HTTP rejection, and ambiguous network errors", async (t) => {
+  const disabled = await fixture(t, { webhookUrl: "" });
+  await assert.rejects(disabled.service.sendTest(account), { status: 503 });
+  const rejected = await fixture(t, { fetchImpl: async () => new Response(null, { status: 401 }) });
+  await assert.rejects(rejected.service.sendTest(account), /HTTP 401/);
+  const lost = await fixture(t, { fetchImpl: async () => { throw new Error("secret URL must not leak"); } });
+  await assert.rejects(lost.service.sendTest(account), /could not be confirmed/);
+});
