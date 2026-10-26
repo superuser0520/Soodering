@@ -3,7 +3,16 @@ const assert = require("node:assert/strict");
 const { mkdtemp, rm, readFile } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { createReleaseNotifications } = require("../release-notifications");
+const { createReleaseNotifications, nextReleaseCheck } = require("../release-notifications");
+
+test("release checks run at the next 08:00 Singapore time, independent of server timezone", () => {
+  for (const [now, expected] of [
+    ["2026-10-26T07:59:00+08:00", "2026-10-26T08:00:00+08:00"],
+    ["2026-10-26T08:00:00+08:00", "2026-10-27T08:00:00+08:00"],
+    ["2026-10-26T15:00:00+08:00", "2026-10-27T08:00:00+08:00"],
+    ["2026-12-31T23:59:00+08:00", "2027-01-01T08:00:00+08:00"]
+  ]) assert.equal(nextReleaseCheck(Date.parse(now)), Date.parse(expected));
+});
 
 const account = { username: "person@example.com", name: "Person" };
 const days = (...dates) => dates.map((date) => ({ date, products: [{ item: "Lunch" }] }));

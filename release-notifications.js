@@ -7,6 +7,14 @@ function availableDates(days, today) {
     && day.date >= today && day.products?.length).map((day) => day.date))].sort();
 }
 
+// Singapore is UTC+8 year round: 08:00 Singapore is 00:00 UTC.
+function nextReleaseCheck(now = Date.now()) {
+  const next = new Date(now);
+  next.setUTCHours(0, 0, 0, 0);
+  if (next.getTime() <= now) next.setUTCDate(next.getUTCDate() + 1);
+  return next.getTime();
+}
+
 function createReleaseNotifications({ file, webhookUrl, fetchImpl = fetch,
   today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()) }) {
   let chain = Promise.resolve();
@@ -190,4 +198,4 @@ function createReleaseNotifications({ file, webhookUrl, fetchImpl = fetch,
   };
 }
 
-module.exports = { createReleaseNotifications, availableDates };
+module.exports = { createReleaseNotifications, availableDates, nextReleaseCheck };

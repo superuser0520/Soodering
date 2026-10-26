@@ -147,8 +147,8 @@ function renderReleaseSubscription(data) {
   releaseSubscriptionPanel.hidden = !data.enabled || !state.account;
   releaseSubscriptionButton.textContent = data.subscribed ? "Unsubscribe" : "Subscribe";
   releaseSubscriptionStatus.textContent = data.subscribed
-    ? `Subscribed: new lunch dates will be emailed to ${state.account.username}.`
-    : "Receive an email when new lunch dates become available.";
+    ? `Subscribed: checked daily at 8:00 AM Singapore time. New lunch dates will be emailed to ${state.account.username}.`
+    : "Receive new lunch date emails after the daily 8:00 AM Singapore time check.";
 }
 
 async function loadReleaseSubscription() {

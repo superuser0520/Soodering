@@ -3,7 +3,7 @@ const crypto = require("node:crypto");
 const { appendFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { config, publicConfig } = require("./config");
-const { createReleaseNotifications } = require("./release-notifications");
+const { createReleaseNotifications, nextReleaseCheck } = require("./release-notifications");
 
 const PORT = config.port;
 const SITE_ORIGIN = config.siteOrigin;
@@ -1574,7 +1574,6 @@ async function loadMenusUncached({ forceExtended = false } = {}) {
   cachedAt = now;
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(MENU_CACHE_FILE, JSON.stringify(cachedMenus), "utf8");
-  void releaseNotifications.observe(cachedMenus.days).catch(() => console.warn("Release notification storage could not be updated."));
   return cachedMenus;
 }
 
@@ -1937,16 +1936,22 @@ const server = http.createServer(async (request, response) => {
 let releasePollTimer;
 server.on("listening", () => {
   if (!releaseNotifications.enabled) return;
-  const poll = async () => {
-    try {
-      if (await releaseNotifications.hasSubscribers()) await loadMenus();
-    } catch { console.warn("Release menu polling failed; it will retry on the next interval."); }
+  const schedule = () => {
+    if (!server.listening) return;
+    releasePollTimer = setTimeout(async () => {
+      try {
+        if (await releaseNotifications.hasSubscribers()) {
+          const menus = await loadMenus(true);
+          await releaseNotifications.observe(menus.days);
+        }
+      } catch { console.warn("Daily release check failed; the next scheduled check is at 08:00 Singapore time tomorrow."); }
+      finally { schedule(); }
+    }, nextReleaseCheck() - Date.now());
+    releasePollTimer.unref();
   };
-  releasePollTimer = setInterval(poll, Math.max(CACHE_MS, 60000));
-  releasePollTimer.unref();
-  void poll();
+  schedule();
 });
-server.on("close", () => clearInterval(releasePollTimer));
+server.on("close", () => clearTimeout(releasePollTimer));
 
 async function startServer() {
   if (server.listening) return Promise.resolve(server);
