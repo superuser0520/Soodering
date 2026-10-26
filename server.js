@@ -110,7 +110,7 @@ function normalizeStall(value) {
 
 async function fetchHtml(url) {
   const response = await fetch(url, {
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(60000),
     headers: {
       "user-agent": "Mozilla/5.0 Shimano Lunch Viewer",
       accept: "text/html,application/xhtml+xml"
@@ -154,7 +154,7 @@ function createSiteSession() {
 
     const response = await fetch(url, {
       redirect: "manual",
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(60000),
       ...options,
       headers
     });
@@ -899,16 +899,6 @@ async function submitQueuedSelection(session, selection, options, item, dependen
   for (let attempt = 1; attempt <= 3; attempt++) {
     item.attempts = attempt;
     await access(session);
-    item.status = "verifying";
-    item.message = "Checking cafeteria orders before submitting...";
-    let orders;
-    try { orders = await readOrders(session); } catch (error) {
-      const verificationError = new Error(`Could not verify cafeteria orders. No new checkout was submitted. ${error.message}`);
-      verificationError.needsReview = uncertainDates.has(dateKey);
-      throw verificationError;
-    }
-    const existing = activeOrderForDate(orders, selection.date);
-    if (existing) return confirmed(existing);
     if (uncertainDates.has(dateKey)) {
       const error = new Error("A previous checkout could not be confirmed. Check Upcoming orders or contact the cafeteria before submitting this date again.");
       error.needsReview = true;
@@ -947,7 +937,7 @@ async function submitQueuedSelection(session, selection, options, item, dependen
       await clearPending(dateKey).catch(() => {});
       if (attempt === 3 || !isTransientOrderError(error)) throw error;
       item.status = "retrying";
-      item.message = `Temporary failure. Retrying after checking the order list (attempt ${attempt + 1} of 3)...`;
+      item.message = `Temporary failure. Retrying (attempt ${attempt + 1} of 3)...`;
       await wait(attempt * 1000);
     }
   }

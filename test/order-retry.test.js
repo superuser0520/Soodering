@@ -21,11 +21,11 @@ function fixture(overrides = {}) {
   return { calls, dependencies, item, run: () => submitQueuedSelection({ account: { username: "person@example.com" } }, { date: "2026-10-01", productId: "123" }, {}, item, dependencies) };
 }
 
-test("temporary preparation failure retries after checking orders and succeeds", async () => {
+test("temporary preparation failure retries without checking orders and succeeds", async () => {
   let adds = 0;
   const f = fixture({ add: async () => { if (++adds === 1) throw new Error("fetch failed"); } });
   assert.equal((await f.run()).result, "success");
-  assert.equal(f.calls.read, 2);
+  assert.equal(f.calls.read, 0);
   assert.equal(f.calls.checkout, 1);
   assert.equal(f.item.attempts, 2);
   assert.deepEqual(f.calls.waits, [1000]);
@@ -39,15 +39,15 @@ test("explicit transient checkout rejection retries at most three times", async 
   } });
   await assert.rejects(f.run(), /Session expired/);
   assert.equal(submits, 3);
-  assert.equal(f.calls.read, 3);
+  assert.equal(f.calls.read, 0);
   assert.deepEqual(f.calls.waits, [1000, 2000]);
 });
 
-test("an existing active date is confirmed without another checkout", async () => {
+test("an existing active date does not trigger a pre-checkout history check", async () => {
   const f = fixture({ readOrders: async () => [{ deliveryDate: "2026-10-01", status: "Processing", viewUrl: "/view-order/123" }] });
-  assert.equal((await f.run()).alreadyOrdered, true);
-  assert.equal(f.calls.checkout, 0);
-  assert.equal(f.calls.clear, 0);
+  assert.equal((await f.run()).result, "success");
+  assert.equal(f.calls.checkout, 1);
+  assert.equal(f.calls.clear, 1);
 });
 
 test("a cancelled order does not prevent a new order", async () => {
@@ -60,11 +60,12 @@ test("lost checkout response is reconciled without resubmitting", async () => {
   let reads = 0;
   let submits = 0;
   const f = fixture({
-    readOrders: async () => ++reads === 1 ? [] : [{ deliveryDate: "2026-10-01", status: "Processing" }],
+    readOrders: async () => { reads++; return [{ deliveryDate: "2026-10-01", status: "Processing" }]; },
     checkout: async () => { submits++; throw Object.assign(new Error("fetch failed"), { orderOutcomeUnknown: true }); }
   });
   assert.equal((await f.run()).alreadyOrdered, true);
   assert.equal(submits, 1);
+  assert.equal(reads, 1);
   assert.equal(f.dependencies.uncertainDates.size, 0);
 });
 
@@ -75,12 +76,12 @@ test("unconfirmed checkout is held for review even on a deliberate retry", async
     throw Object.assign(new Error("Timeout"), { orderOutcomeUnknown: true });
   } });
   await assert.rejects(f.run(), { needsReview: true });
-  assert.equal(f.calls.read, 3);
+  assert.equal(f.calls.read, 2);
   await assert.rejects(f.run(), { needsReview: true });
   assert.equal(submits, 1);
 });
 
-test("permanent errors, access restrictions, and incomplete verification are not retried", async () => {
+test("permanent errors and access restrictions are not retried; unavailable history does not block checkout", async () => {
   const permanent = fixture({ checkout: async () => { throw Object.assign(new Error("Insufficient wallet balance"), { checkoutRejected: true }); } });
   await assert.rejects(permanent.run(), /Insufficient/);
   assert.deepEqual(permanent.calls.waits, []);
@@ -88,23 +89,15 @@ test("permanent errors, access restrictions, and incomplete verification are not
   await assert.rejects(restricted.run(), { status: 403 });
   assert.equal(restricted.calls.checkout, 0);
   const incomplete = fixture({ readOrders: async () => { throw new Error("Some pages failed"); } });
-  await assert.rejects(incomplete.run(), /No new checkout was submitted/);
-  assert.equal(incomplete.calls.checkout, 0);
+  assert.equal((await incomplete.run()).result, "success");
+  assert.equal(incomplete.calls.checkout, 1);
 });
 
-test("a pending checkout from a previous process is checked but never blindly resubmitted", async () => {
+test("a pending checkout from a previous process is held without checking history or resubmitting", async () => {
   const pending = fixture({ readPending: async () => true });
   await assert.rejects(pending.run(), { needsReview: true });
   assert.equal(pending.calls.checkout, 0);
-  let cleared = false;
-  const confirmed = fixture({
-    readPending: async () => true,
-    readOrders: async () => [{ deliveryDate: "2026-10-01", status: "Processing" }],
-    clearPending: async () => { cleared = true; }
-  });
-  assert.equal((await confirmed.run()).alreadyOrdered, true);
-  assert.equal(confirmed.calls.checkout, 0);
-  assert.equal(cleared, true);
+  assert.equal(pending.calls.read, 0);
 });
 
 test("confirmed checkout remains successful when loading orders fails afterward", async () => {
