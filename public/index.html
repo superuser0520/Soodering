@@ -143,6 +143,29 @@
             <p id="releaseTestEmailStatus" class="meta" role="status" aria-live="polite">Send a test email to your signed-in admin email address through Power Automate.</p>
             <button id="releaseTestEmailButton" class="secondary" type="button">Send test email</button>
           </section>
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Menu email announcements</h2>
+              <button id="refreshReleaseAudienceButton" class="secondary" type="button">Refresh recipients</button>
+            </div>
+            <p id="releaseAudienceStatus" class="meta" role="status"></p>
+            <h3>Current subscribers</h3>
+            <div id="releaseSubscriberList" class="usage-list"></div>
+            <p class="meta">Past ordering users are recorded from successful checkouts and loaded cafeteria order histories after this update. Returning users should sign in and refresh Upcoming orders to be included. Login records alone do not establish a past order.</p>
+            <label for="releaseAnnouncementMonth">Menu month</label>
+            <input id="releaseAnnouncementMonth" type="month" required>
+            <label for="releaseAnnouncementAudience">Send to</label>
+            <select id="releaseAnnouncementAudience">
+              <option value="subscribers">All current subscribers</option>
+              <option value="customers">All known users who placed an order before</option>
+            </select>
+            <p class="meta">The past-ordering group can include users who are not subscribed. Each person receives at most one manual announcement per month, across both groups.</p>
+            <button id="previewReleaseAnnouncementButton" class="secondary" type="button">Preview announcement</button>
+            <pre id="releaseAnnouncementPreview" class="meta" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+            <button id="sendReleaseAnnouncementButton" type="button" disabled>Send announcement</button>
+            <p id="releaseAnnouncementStatus" class="meta" role="status" aria-live="polite"></p>
+            <div id="releaseAnnouncementJobs" class="usage-list" aria-live="polite"></div>
+          </section>
           <section class="panel notification-editor-panel">
             <div class="panel-heading">
               <div>
@@ -250,6 +273,6 @@
       <form method="dialog"><button type="submit" autofocus>OK</button></form>
     </dialog>
 
-    <script src="/app.js?v=37"></script>
+    <script src="/app.js?v=38"></script>
   </body>
 </html>

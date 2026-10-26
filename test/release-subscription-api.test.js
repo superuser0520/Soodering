@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { mkdtemp, rm } = require("node:fs/promises");
+const { mkdtemp, rm, writeFile } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { once } = require("node:events");
@@ -20,6 +20,7 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
       return new Response(null, { status: 202 });
     }
     upstreamRequests++;
+    if (String(url).includes("/orders/")) return new Response('<table><tbody><tr><td>#123</td><td>Today</td><td>November 3, 2026</td><td>Chicken</td><td>Processing</td><td>$5</td></tr></tbody></table>');
     return new Response('<p>Hello <strong>Person</strong></p><p class="woo-wallet-price">$100</p>');
   };
   const { server } = require("../server");
@@ -68,6 +69,36 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
     assert.match((await manual.json()).message, /accepted/);
     assert.equal(sent.length, 1);
     assert.equal(sent[0].email, "admin@example.com");
+    for (const endpoint of ["release-audience", "release-preview", "release-announce"]) {
+      const blocked = await realFetch(`${base}/api/admin/${endpoint}`, { headers: { cookie } });
+      assert.equal(blocked.status, 403);
+    }
+    const orders = await realFetch(`${base}/api/orders`, { headers: { cookie } });
+    assert.equal(orders.status, 200);
+    const menuDate = "2099-11-03";
+    await writeFile(path.join(directory, "menu-cache.json"), JSON.stringify({ cacheVersion: 3,
+      fetchedAt: new Date().toISOString(), days: [{ date: menuDate, products: [{ item: "Chicken" }] }] }));
+    const audience = await realFetch(`${base}/api/admin/release-audience`, { headers: { cookie: adminCookie } });
+    const audienceData = await audience.json();
+    assert.equal(audienceData.customerCount, 1);
+    assert.match(audienceData.defaultMonth, /^\d{4}-\d{2}$/);
+    const planResponse = await realFetch(`${base}/api/admin/release-preview?month=2099-11&audience=customers`, { headers: { cookie: adminCookie } });
+    assert.equal(planResponse.status, 200);
+    const plan = await planResponse.json();
+    assert.equal(plan.recipientCount, 1);
+    const announcement = await realFetch(`${base}/api/admin/release-announce`, {
+      method: "POST", headers: { cookie: adminCookie, "content-type": "application/json" },
+      body: JSON.stringify({ month: "2099-11", audience: "customers", token: plan.token })
+    });
+    assert.equal(announcement.status, 202);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const list = await realFetch(`${base}/api/admin/release-audience`, { headers: { cookie: adminCookie } });
+      if ((await list.json()).campaigns[0].status === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(sent.length, 2);
+    assert.equal(sent[1].email, "person@example.com");
+    assert.match(sent[1].subject, /November 2099/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     global.fetch = realFetch;

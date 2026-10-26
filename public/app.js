@@ -49,6 +49,77 @@ const accountStatus = document.querySelector("#accountStatus");
 const signedInLabel = document.querySelector("#signedInLabel");
 const loginButton = document.querySelector("#loginButton");
 const logoutButton = document.querySelector("#logoutButton");
+const releaseAnnouncementMonth = document.querySelector("#releaseAnnouncementMonth");
+const releaseAnnouncementAudience = document.querySelector("#releaseAnnouncementAudience");
+const releaseAnnouncementStatus = document.querySelector("#releaseAnnouncementStatus");
+const releaseAnnouncementPreview = document.querySelector("#releaseAnnouncementPreview");
+const sendReleaseAnnouncementButton = document.querySelector("#sendReleaseAnnouncementButton");
+let releaseAnnouncementPlan = null;
+let releaseAnnouncementPoll;
+let releaseAnnouncementSending = false;
+
+async function loadReleaseAudience() {
+  clearTimeout(releaseAnnouncementPoll);
+  if (!canViewUsage()) return;
+  const username = state.account.username;
+  try {
+    const data = await api("/api/admin/release-audience");
+    if (!canViewUsage() || state.account.username !== username) return;
+    document.querySelector("#releaseAudienceStatus").textContent = `${data.subscribers.length} subscriber(s). ${data.customerCount} known past ordering user(s).${data.enabled ? "" : " Email is not configured on this server."}`;
+    document.querySelector("#releaseSubscriberList").innerHTML = data.subscribers.length
+      ? data.subscribers.map((entry) => `<div class="list-row"><span><strong>${escapeHtml(entry.username)}</strong><br>${escapeHtml(entry.email)}</span></div>`).join("")
+      : '<p class="meta">No current subscribers.</p>';
+    if (!releaseAnnouncementMonth.value) releaseAnnouncementMonth.value = data.defaultMonth;
+    document.querySelector("#releaseAnnouncementJobs").innerHTML = data.campaigns.slice(0, 10).map((job) =>
+      `<div class="list-row"><span>${escapeHtml(job.month)} · ${job.audience === "subscribers" ? "Subscribers" : "Past ordering users"} · ${escapeHtml(job.status)}<br>${job.accepted}/${job.total} accepted by Power Automate; ${job.failed} failed; ${job.unknown} uncertain; ${job.pending} pending.</span></div>`).join("");
+    if (data.campaigns.some((job) => job.status === "sending") && state.activeTab === "usage") {
+      releaseAnnouncementPoll = setTimeout(loadReleaseAudience, 3000);
+    }
+  } catch (error) { document.querySelector("#releaseAudienceStatus").textContent = error.message; }
+}
+
+function resetReleaseAnnouncementPreview() {
+  releaseAnnouncementPlan = null;
+  sendReleaseAnnouncementButton.disabled = true;
+  releaseAnnouncementPreview.textContent = "";
+}
+releaseAnnouncementMonth.addEventListener("change", resetReleaseAnnouncementPreview);
+releaseAnnouncementAudience.addEventListener("change", resetReleaseAnnouncementPreview);
+document.querySelector("#refreshReleaseAudienceButton").addEventListener("click", loadReleaseAudience);
+document.querySelector("#previewReleaseAnnouncementButton").addEventListener("click", async (event) => {
+  if (releaseAnnouncementSending) return;
+  resetReleaseAnnouncementPreview();
+  const month = releaseAnnouncementMonth.value;
+  const audience = releaseAnnouncementAudience.value;
+  const username = state.account?.username;
+  event.currentTarget.disabled = true;
+  const button = event.currentTarget;
+  releaseAnnouncementStatus.textContent = "Preparing preview...";
+  try {
+    const data = await api(`/api/admin/release-preview?month=${encodeURIComponent(month)}&audience=${encodeURIComponent(audience)}`);
+    if (state.account?.username !== username || month !== releaseAnnouncementMonth.value || audience !== releaseAnnouncementAudience.value) return;
+    releaseAnnouncementPlan = data;
+    releaseAnnouncementPreview.textContent = `To: ${data.recipientCount} recipient(s)\nAlready announced this month: ${data.skippedCount}\nSubject: ${data.subject}\n\n${data.message}`;
+    sendReleaseAnnouncementButton.disabled = !data.recipientCount || !data.dates.length;
+    releaseAnnouncementStatus.textContent = data.dates.length ? "Review the recipients and message, then send." : "No published menu dates found for this month. Nothing will be sent.";
+  } catch (error) { releaseAnnouncementStatus.textContent = error.message; }
+  finally { button.disabled = false; }
+});
+sendReleaseAnnouncementButton.addEventListener("click", async () => {
+  if (releaseAnnouncementSending || !releaseAnnouncementPlan) return;
+  const plan = releaseAnnouncementPlan;
+  if (!window.confirm(`Send the ${plan.month} menu announcement to ${plan.recipientCount} ${plan.audience === "subscribers" ? "subscriber(s)" : "past ordering user(s), including non-subscribers"}?`)) return;
+  releaseAnnouncementSending = true;
+  sendReleaseAnnouncementButton.disabled = true;
+  releaseAnnouncementStatus.textContent = "Starting announcement...";
+  try {
+    const job = await api("/api/admin/release-announce", { method: "POST", body: JSON.stringify({ month: plan.month, audience: plan.audience, token: plan.token }) });
+    releaseAnnouncementStatus.textContent = `Announcement started for ${job.total} recipient(s). Sending continues on the server if you close this browser.`;
+    resetReleaseAnnouncementPreview();
+    await loadReleaseAudience();
+  } catch (error) { releaseAnnouncementStatus.textContent = error.message; resetReleaseAnnouncementPreview(); }
+  finally { releaseAnnouncementSending = false; }
+});
 const releaseTestEmailButton = document.querySelector("#releaseTestEmailButton");
 const releaseTestEmailStatus = document.querySelector("#releaseTestEmailStatus");
 releaseTestEmailButton.addEventListener("click", async () => {
@@ -1239,6 +1310,7 @@ tabButtons.forEach((button) => {
     } else if (state.activeTab === "usage") {
       loadUsage();
       loadOrderRestrictions();
+      loadReleaseAudience();
     }
   });
 });

@@ -837,6 +837,7 @@ async function placeOrder(session, { timeSlot = "", notes = "", includeOrders = 
     throw error;
   }
 
+  await releaseNotifications.recordCustomer(session.account).catch(() => console.warn("Could not save the ordering user's email for announcements."));
   return {
     result: payload.result,
     redirect: payload.redirect || "",
@@ -1184,12 +1185,16 @@ async function loadOrders(session, { requireComplete = false } = {}) {
   const pages = [firstPage, ...extraPages.filter((result) => result.status === "fulfilled").map((result) => result.value)];
 
   const seen = new Set();
-  return pages.flat().filter((order) => {
+  const orders = pages.flat().filter((order) => {
     const key = `${order.order}|${order.deliveryDate}|${order.product}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  if (orders.some((order) => !/^failed$/i.test(order.status || ""))) {
+    await releaseNotifications.recordCustomer(session.account).catch(() => console.warn("Could not save the ordering user's email for announcements."));
+  }
+  return orders;
 }
 
 async function loadWalletCached(session, { force = false } = {}) {
@@ -1673,6 +1678,25 @@ const server = http.createServer(async (request, response) => {
       } else {
         sendJson(response, 405, { error: "Method not allowed." });
       }
+      return;
+    }
+
+    if (["/api/admin/release-audience", "/api/admin/release-preview", "/api/admin/release-announce"].includes(url.pathname)) {
+      await ensureLoggedIn(session);
+      assertUsageAdmin(session);
+      if (url.pathname === "/api/admin/release-audience" && request.method === "GET") {
+        const currentMonth = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore", year: "numeric", month: "2-digit" }).format(new Date()).slice(0, 7);
+        const nextMonth = new Date(`${currentMonth}-01T00:00:00Z`);
+        nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+        sendJson(response, 200, { ...await releaseNotifications.adminList(), defaultMonth: nextMonth.toISOString().slice(0, 7) });
+      } else if (url.pathname === "/api/admin/release-preview" && request.method === "GET") {
+        const menus = await loadMenus();
+        sendJson(response, 200, await releaseNotifications.previewAnnouncement(url.searchParams.get("month"), url.searchParams.get("audience"), menus.days));
+      } else if (url.pathname === "/api/admin/release-announce" && request.method === "POST") {
+        const { month, audience, token } = await readJsonBody(request);
+        const menus = await loadMenus();
+        sendJson(response, 202, await releaseNotifications.announce(month, audience, menus.days, token));
+      } else sendJson(response, 405, { error: "Method not allowed." });
       return;
     }
 

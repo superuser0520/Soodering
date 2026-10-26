@@ -107,3 +107,80 @@ test("manual email reports missing configuration, HTTP rejection, and ambiguous 
   const lost = await fixture(t, { fetchImpl: async () => { throw new Error("secret URL must not leak"); } });
   await assert.rejects(lost.service.sendTest(account), /could not be confirmed/);
 });
+
+async function finishCampaign(service, id) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const job = (await service.adminList()).campaigns.find((entry) => entry.id === id);
+    if (job.status !== "sending") return job;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail("Announcement did not finish");
+}
+
+test("admin sees active subscribers and deduplicated past ordering users", async (t) => {
+  const { service } = await fixture(t);
+  await service.subscribe(account, true, []);
+  await service.subscribe({ username: "unsubscribed@example.com" }, false, []);
+  await service.recordCustomer(account);
+  await service.recordCustomer({ ...account, username: "PERSON@example.com" });
+  const list = await service.adminList();
+  assert.deepEqual(list.subscribers, [{ email: account.username, username: account.name }]);
+  assert.equal(list.customerCount, 1);
+});
+
+test("manual monthly announcements deduplicate overlapping groups across restart", async (t) => {
+  const { service, sent, options } = await fixture(t);
+  await service.subscribe(account, true, []);
+  await service.recordCustomer(account);
+  await service.recordCustomer({ username: "customer@example.com", name: "Customer" });
+  const menus = days("2026-11-03", "2026-11-04", "2026-12-01");
+  const preview = await service.previewAnnouncement("2026-11", "subscribers", menus);
+  assert.equal(preview.recipientCount, 1);
+  assert.deepEqual(preview.dates, ["2026-11-03", "2026-11-04"]);
+  assert.equal("recipients" in preview, false);
+  const job = await service.announce("2026-11", "subscribers", menus, preview.token);
+  assert.equal((await finishCampaign(service, job.id)).accepted, 1);
+  assert.match(sent[0].subject, /November 2026/);
+  assert.doesNotMatch(sent[0].message, /2026-12/);
+  const restarted = createReleaseNotifications(options);
+  const customerPreview = await restarted.previewAnnouncement("2026-11", "customers", menus);
+  assert.equal(customerPreview.recipientCount, 1);
+  assert.equal(customerPreview.skippedCount, 1);
+  const customerJob = await restarted.announce("2026-11", "customers", menus, customerPreview.token);
+  assert.equal((await finishCampaign(restarted, customerJob.id)).accepted, 1);
+  assert.equal(sent[1].email, "customer@example.com");
+  assert.equal((await restarted.previewAnnouncement("2026-11", "customers", menus)).recipientCount, 0);
+});
+
+test("stale previews, invalid choices, empty menus, and simultaneous sends cannot send duplicates", async (t) => {
+  const { service, sent } = await fixture(t);
+  const menus = days("2026-11-03");
+  await service.subscribe(account, true, []);
+  await assert.rejects(service.previewAnnouncement("2026-13", "subscribers", menus), { status: 400 });
+  await assert.rejects(service.previewAnnouncement("2026-11", "everyone", menus), { status: 400 });
+  const stale = await service.previewAnnouncement("2026-11", "subscribers", menus);
+  await service.subscribe({ username: "new@example.com" }, true, []);
+  await assert.rejects(service.announce("2026-11", "subscribers", menus, stale.token), { status: 409 });
+  const empty = await service.previewAnnouncement("2026-12", "subscribers", menus);
+  await assert.rejects(service.announce("2026-12", "subscribers", menus, empty.token), { status: 400 });
+  const current = await service.previewAnnouncement("2026-11", "subscribers", menus);
+  const results = await Promise.allSettled([service.announce("2026-11", "subscribers", menus, current.token), service.announce("2026-11", "subscribers", menus, current.token)]);
+  assert.equal(results.filter((entry) => entry.status === "fulfilled").length, 1);
+  const job = results.find((entry) => entry.status === "fulfilled").value;
+  await finishCampaign(service, job.id);
+  assert.equal(sent.length, 2);
+});
+
+test("failed and ambiguous announcements remain claimed instead of resending", async (t) => {
+  let sends = 0;
+  const { service } = await fixture(t, { fetchImpl: async () => { if (++sends === 1) throw new Error("timeout"); return new Response(null, { status: 500 }); } });
+  await service.subscribe(account, true, []);
+  await service.subscribe({ username: "other@example.com" }, true, []);
+  const menus = days("2026-11-03");
+  const preview = await service.previewAnnouncement("2026-11", "subscribers", menus);
+  const job = await service.announce("2026-11", "subscribers", menus, preview.token);
+  const result = await finishCampaign(service, job.id);
+  assert.equal(result.failed, 1);
+  assert.equal(result.unknown, 1);
+  assert.equal((await service.previewAnnouncement("2026-11", "subscribers", menus)).recipientCount, 0);
+});
