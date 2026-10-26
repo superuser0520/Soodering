@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "electron": "electron .",
-    "check": "node --check server.js && node --check electron-main.js && node --check preload.js && node --check public/app.js",
+    "check": "node --check server.js && node --check release-notifications.js && node --check electron-main.js && node --check preload.js && node --check public/app.js",
     "test": "node --test",
     "ci": "npm run check && npm test",
     "build:mac": "electron-builder --mac dir --arm64",
@@ -31,6 +31,7 @@
       "electron-main.js",
       "preload.js",
       "server.js",
+      "release-notifications.js",
       "config.js",
       "package.json",
       "public/**/*"

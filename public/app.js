@@ -49,6 +49,47 @@ const accountStatus = document.querySelector("#accountStatus");
 const signedInLabel = document.querySelector("#signedInLabel");
 const loginButton = document.querySelector("#loginButton");
 const logoutButton = document.querySelector("#logoutButton");
+const releaseSubscriptionPanel = document.querySelector("#releaseSubscriptionPanel");
+const releaseSubscriptionButton = document.querySelector("#releaseSubscriptionButton");
+const releaseSubscriptionStatus = document.querySelector("#releaseSubscriptionStatus");
+let releaseSubscribed = false;
+let releaseSubscriptionBusy = false;
+
+function renderReleaseSubscription(data) {
+  releaseSubscribed = data.subscribed;
+  releaseSubscriptionPanel.hidden = !data.enabled || !state.account;
+  releaseSubscriptionButton.textContent = data.subscribed ? "Unsubscribe" : "Subscribe";
+  releaseSubscriptionStatus.textContent = data.subscribed
+    ? `Subscribed: new lunch dates will be emailed to ${state.account.username}.`
+    : "Receive an email when new lunch dates become available.";
+}
+
+async function loadReleaseSubscription() {
+  const account = state.account;
+  if (!account || releaseSubscriptionBusy) return;
+  try {
+    const data = await api("/api/release-subscription");
+    if (state.account?.username === account.username) renderReleaseSubscription(data);
+  } catch { releaseSubscriptionPanel.hidden = true; }
+}
+
+releaseSubscriptionButton.addEventListener("click", async () => {
+  if (releaseSubscriptionBusy) return;
+  const account = state.account;
+  releaseSubscriptionBusy = true;
+  releaseSubscriptionButton.disabled = true;
+  try {
+    const data = await api("/api/release-subscription", {
+      method: "POST", body: JSON.stringify({ subscribed: !releaseSubscribed })
+    });
+    if (state.account?.username === account?.username) renderReleaseSubscription(data);
+  } catch (error) {
+    if (state.account?.username === account?.username) releaseSubscriptionStatus.textContent = error.message;
+  } finally {
+    releaseSubscriptionBusy = false;
+    releaseSubscriptionButton.disabled = false;
+  }
+});
 const walletBalance = document.querySelector("#walletBalance");
 const creditPanel = document.querySelector("#creditPanel");
 const creditDaily = document.querySelector("#creditDaily");
@@ -519,6 +560,8 @@ function showSystemNotification(title, message, { tone = "error", timeout = 1000
 }
 
 function renderAccount() {
+  releaseSubscriptionPanel.hidden = true;
+  if (state.account) void loadReleaseSubscription();
   if (state.account) {
     const label = `${state.account.name || state.account.username}${state.account.staffId ? ` #${state.account.staffId}` : ""}`;
     signedInLabel.textContent = label;

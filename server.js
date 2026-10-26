@@ -3,12 +3,17 @@ const crypto = require("node:crypto");
 const { appendFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { config, publicConfig } = require("./config");
+const { createReleaseNotifications } = require("./release-notifications");
 
 const PORT = config.port;
 const SITE_ORIGIN = config.siteOrigin;
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = process.env.SOODEERING_DATA_DIR ? path.resolve(process.env.SOODEERING_DATA_DIR) : path.join(__dirname, "data");
+const releaseNotifications = createReleaseNotifications({
+  file: path.join(DATA_DIR, "release-notifications.json"),
+  webhookUrl: process.env.SOODEERING_DESKTOP === "1" ? "" : process.env.POWER_AUTOMATE_RELEASE_URL || ""
+});
 const USAGE_LOG = path.join(DATA_DIR, "usage.jsonl");
 const ROWENA_SETTINGS_FILE = path.join(DATA_DIR, "rowena-settings.json");
 const ORDER_RESTRICTIONS_FILE = path.join(DATA_DIR, "order-restrictions.json");
@@ -1564,6 +1569,7 @@ async function loadMenusUncached({ forceExtended = false } = {}) {
   cachedAt = now;
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(MENU_CACHE_FILE, JSON.stringify(cachedMenus), "utf8");
+  void releaseNotifications.observe(cachedMenus.days).catch(() => console.warn("Release notification storage could not be updated."));
   return cachedMenus;
 }
 
@@ -1649,6 +1655,24 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/config") {
       sendJson(response, 200, publicConfig());
+      return;
+    }
+
+    if (url.pathname === "/api/release-subscription") {
+      await ensureLoggedIn(session);
+      if (request.method === "GET") {
+        sendJson(response, 200, await releaseNotifications.status(session.account));
+      } else if (request.method === "POST") {
+        const { subscribed } = await readJsonBody(request);
+        if (typeof subscribed !== "boolean") {
+          sendJson(response, 400, { error: "Choose whether to subscribe." });
+          return;
+        }
+        const menus = subscribed ? await loadMenus() : { days: [] };
+        sendJson(response, 200, await releaseNotifications.subscribe(session.account, subscribed, menus.days));
+      } else {
+        sendJson(response, 405, { error: "Method not allowed." });
+      }
       return;
     }
 
@@ -1874,6 +1898,20 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, error.status || 500, { error: error.message });
   }
 });
+
+let releasePollTimer;
+server.on("listening", () => {
+  if (!releaseNotifications.enabled) return;
+  const poll = async () => {
+    try {
+      if (await releaseNotifications.hasSubscribers()) await loadMenus();
+    } catch { console.warn("Release menu polling failed; it will retry on the next interval."); }
+  };
+  releasePollTimer = setInterval(poll, Math.max(CACHE_MS, 60000));
+  releasePollTimer.unref();
+  void poll();
+});
+server.on("close", () => clearInterval(releasePollTimer));
 
 async function startServer() {
   if (server.listening) return Promise.resolve(server);

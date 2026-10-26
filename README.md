@@ -62,6 +62,18 @@ Copy `.env.example` to `.env`, edit the values, and restart SooDering. Settings 
 
 ## Notes
 
+### New lunch date email alerts (online server)
+
+Set `POWER_AUTOMATE_RELEASE_URL` in the Pi server's `.env` to the signed Power Automate HTTP trigger URL, then restart `soodering.service`. Keep the URL out of source control. Desktop installations do not enable this feature.
+
+Signed-in users can click **Subscribe** under **New menu alerts**, or **Unsubscribe** to stop. The recipient is the signed-in cafeteria account email; users cannot supply another recipient. Available dates at subscription time form the baseline and do not generate emails. Newly discovered dates with visible menu items generate one email per subscriber listing those dates. Dates use Singapore time. Repeated refreshes, disappearing/reappearing menus, and server restarts do not resend the same dates.
+
+Menu discovery by any online user checks for releases. While subscriptions exist, the server also polls at `MENU_CACHE_MS` (five minutes by default, at least one minute) while running, even with no browser open. Existing menu discovery caching still applies. Subscriptions and delivery records persist in `data/release-notifications.json` (or `SOODEERING_DATA_DIR`); preserve this file across deployments. This coordinates one online server, not independent installations or multiple server processes sharing a folder.
+
+The webhook receives JSON with `email`, `username`, `subject`, and `message`. Configure the email action's To field as `email` and Subject as `subject`; the supplied Dear `username` / `message` body is supported. A successful HTTP response means Power Automate accepted the request, not that the inbox received the email. Ensure the flow's email action renders message line breaks as desired.
+
+Delivery attempts are saved **before** calling Power Automate to prevent duplicate sends after a timeout or crash. Delivery records show `accepted`, `failed`, `unknown`, or `pending`. Failed or uncertain attempts are not retried automatically: check the Power Automate run history before manually recovering a missing notification. This favors avoiding duplicate email; it cannot guarantee delivery exactly once through an external email API. The app does not submit lunch orders when sending alerts.
+
 - Select Auto login before signing in to return without entering credentials again in the same browser. It works over a local network and survives server restarts. The browser holds an HttpOnly token; cafeteria credentials are encrypted in the server data folder. Returning renews the one-year token. Explicitly signing out disables Auto login; inactivity does not. Clearing browser cookies or server data requires signing in again. Electron also supports operating-system-encrypted credential storage.
 - Login sessions are kept only in memory and expire after 30 minutes of inactivity by default.
 - After login, the app automatically shows wallet balance and upcoming orders from today onward.
