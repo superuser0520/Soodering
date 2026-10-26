@@ -15,6 +15,15 @@ function nextReleaseCheck(now = Date.now()) {
   return next.getTime();
 }
 
+function availableDateRange(dates) {
+  if (!dates.length) return "No available dates.";
+  const sorted = [...dates].sort();
+  const format = (date) => new Intl.DateTimeFormat("en-SG", {
+    timeZone: "Asia/Singapore", day: "numeric", month: "short", year: "numeric"
+  }).format(new Date(`${date}T12:00:00+08:00`));
+  return `Available dates: ${format(sorted[0])} to ${format(sorted.at(-1))}.`;
+}
+
 function createReleaseNotifications({ file, webhookUrl, fetchImpl = fetch,
   today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()) }) {
   let chain = Promise.resolve();
@@ -47,7 +56,7 @@ function createReleaseNotifications({ file, webhookUrl, fetchImpl = fetch,
     const recipients = eligible.filter((entry) => !state.announcements?.[month]?.[keyFor({ username: entry.email })]);
     const label = new Intl.DateTimeFormat("en-SG", { month: "long", year: "numeric", timeZone: "Asia/Singapore" }).format(new Date(`${month}-01T12:00:00+08:00`));
     const subject = `SooDering: ${label} lunch menu is available`;
-    const message = `The new lunch menu for ${label} is now available.\n\nAvailable dates:\n${dates.join("\n")}\n\nSign in to SooDering to view the menus and place your orders.`;
+    const message = `The new lunch menu for ${label} is now available.\n\n${availableDateRange(dates)}\n\nSign in to SooDering to view the menus and place your orders.`;
     const token = crypto.createHash("sha256").update(JSON.stringify({ month, audience, dates, emails: recipients.map((entry) => entry.email.toLowerCase()).sort() })).digest("hex");
     return { month, audience, dates, subject, message, token, recipients, recipientCount: recipients.length, skippedCount: eligible.length - recipients.length };
   }
@@ -178,13 +187,10 @@ function createReleaseNotifications({ file, webhookUrl, fetchImpl = fetch,
         entry.deliveries.push(delivery);
         // Persist before sending: an ambiguous HTTP result must never send twice.
         await save(state);
-        const labels = released.map((date) => new Intl.DateTimeFormat("en-SG", {
-          timeZone: "Asia/Singapore", weekday: "short", day: "numeric", month: "short", year: "numeric"
-        }).format(new Date(`${date}T12:00:00+08:00`)));
         try {
           const response = await sendEmail({ email: entry.email, username: entry.username,
               subject: "SooDering: new lunch orders available",
-              message: `New lunch orders are now available for:\n\n${labels.join("\n")}\n\nSign in to SooDering to view the menus and place your orders.`
+              message: `New lunch orders are now available.\n\n${availableDateRange(released)}\n\nSign in to SooDering to view the menus and place your orders.`
           });
           delivery.status = response.ok ? "accepted" : "failed";
           delivery.httpStatus = response.status;

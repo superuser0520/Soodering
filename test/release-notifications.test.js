@@ -41,6 +41,7 @@ test("baseline menus are silent; concurrent discoveries and restart send each da
   assert.equal(sent[0].username, "Person");
   assert.match(sent[0].message, /3 Nov 2026/);
   assert.match(sent[0].message, /4 Nov 2026/);
+  assert.match(sent[0].message, /Available dates: 3 Nov 2026 to 4 Nov 2026\./);
   assert.doesNotMatch(sent[0].message, /2 Nov 2026/);
   const restarted = createReleaseNotifications(options);
   await restarted.observe(days("2026-11-02", "2026-11-03", "2026-11-04"));
@@ -150,6 +151,7 @@ test("manual monthly announcements deduplicate overlapping groups across restart
   const job = await service.announce("2026-11", "subscribers", menus, preview.token);
   assert.equal((await finishCampaign(service, job.id)).accepted, 1);
   assert.match(sent[0].subject, /November 2026/);
+  assert.match(sent[0].message, /Available dates: 3 Nov 2026 to 4 Nov 2026\./);
   assert.doesNotMatch(sent[0].message, /2026-12/);
   const restarted = createReleaseNotifications(options);
   const customerPreview = await restarted.previewAnnouncement("2026-11", "customers", menus);
