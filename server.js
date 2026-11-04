@@ -9,7 +9,10 @@ const PORT = config.port;
 const SITE_ORIGIN = config.siteOrigin;
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
 function randomUserAgent() {
-  return `SPL-${crypto.randomBytes(12).toString("hex")}`;
+  const platforms = ["Windows NT 10.0; Win64; x64", "Macintosh; Intel Mac OS X 10_15_7", "X11; Linux x86_64", "X11; Linux aarch64"];
+  const platform = platforms[crypto.randomInt(platforms.length)];
+  const chromeVersion = crypto.randomInt(126, 137);
+  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion}.0.0.0 Safari/537.36`;
 }
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = process.env.SOODEERING_DATA_DIR ? path.resolve(process.env.SOODEERING_DATA_DIR) : path.join(__dirname, "data");
@@ -193,7 +196,9 @@ function createSiteSession() {
     cookies,
     request,
     rotateUserAgent() {
-      userAgent = randomUserAgent();
+      let next;
+      do { next = randomUserAgent(); } while (next === userAgent);
+      userAgent = next;
     },
     reset({ clearCredentials = true } = {}) {
       cookies.clear();

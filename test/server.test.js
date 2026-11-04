@@ -212,7 +212,7 @@ test("cafeteria session keeps its user agent until rotated", async () => {
     await session.request("/woo-wallet/");
     session.rotateUserAgent();
     await session.request("/orders/");
-    assert.match(agents[0], /^SPL-[0-9a-f]{24}$/);
+    assert.match(agents[0], /^Mozilla\/5\.0 \(.+\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/\d+\.0\.0\.0 Safari\/537\.36$/);
     assert.equal(agents[0], agents[1]);
     assert.notEqual(agents[1], agents[2]);
   } finally {
