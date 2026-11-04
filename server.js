@@ -8,7 +8,9 @@ const { createReleaseNotifications, nextReleaseCheck } = require("./release-noti
 const PORT = config.port;
 const SITE_ORIGIN = config.siteOrigin;
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
-const MENU_USER_AGENT = `SPL-${crypto.randomBytes(12).toString("hex")}`;
+function randomUserAgent() {
+  return `SPL-${crypto.randomBytes(12).toString("hex")}`;
+}
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = process.env.SOODEERING_DATA_DIR ? path.resolve(process.env.SOODEERING_DATA_DIR) : path.join(__dirname, "data");
 const releaseNotifications = createReleaseNotifications({
@@ -118,7 +120,7 @@ async function fetchHtml(url) {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(60000),
     headers: {
-      "user-agent": MENU_USER_AGENT,
+      "user-agent": randomUserAgent(),
       accept: "text/html,application/xhtml+xml"
     }
   });
@@ -132,7 +134,6 @@ async function fetchHtml(url) {
 
 function createSiteSession() {
   const cookies = new Map();
-  let userAgent = `SPL-${crypto.randomBytes(12).toString("hex")}`;
 
   function storeCookies(response) {
     const setCookies = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
@@ -151,10 +152,10 @@ function createSiteSession() {
     const url = new URL(pathname, SITE_ORIGIN);
     if (url.origin !== SITE_ORIGIN) throw new Error("Cafeteria requests must remain on the configured origin.");
     const headers = {
-      "user-agent": userAgent,
       accept: "text/html,application/xhtml+xml,application/json",
       referer: SITE_ORIGIN,
-      ...(options.headers || {})
+      ...(options.headers || {}),
+      "user-agent": randomUserAgent()
     };
     const cookie = cookieHeader();
     if (cookie) headers.cookie = cookie;
@@ -190,9 +191,6 @@ function createSiteSession() {
     orderOperations: new Map(),
     cookies,
     request,
-    rotateUserAgent() {
-      userAgent = `SPL-${crypto.randomBytes(12).toString("hex")}`;
-    },
     reset({ clearCredentials = true } = {}) {
       cookies.clear();
       this.account = null;
@@ -588,7 +586,6 @@ function parseAccount(html) {
 
 async function loginToSite(session, username, password) {
   session.reset({ clearCredentials: false });
-  session.rotateUserAgent();
   const loginHtml = await readSitePage(session, "/");
   const body = new URLSearchParams({
     username,
