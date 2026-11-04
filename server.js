@@ -8,6 +8,7 @@ const { createReleaseNotifications, nextReleaseCheck } = require("./release-noti
 const PORT = config.port;
 const SITE_ORIGIN = config.siteOrigin;
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
+const MENU_USER_AGENT = `SPL-${crypto.randomBytes(12).toString("hex")}`;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = process.env.SOODEERING_DATA_DIR ? path.resolve(process.env.SOODEERING_DATA_DIR) : path.join(__dirname, "data");
 const releaseNotifications = createReleaseNotifications({
@@ -117,7 +118,7 @@ async function fetchHtml(url) {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(60000),
     headers: {
-      "user-agent": "Mozilla/5.0 Shimano Lunch Viewer",
+      "user-agent": MENU_USER_AGENT,
       accept: "text/html,application/xhtml+xml"
     }
   });
