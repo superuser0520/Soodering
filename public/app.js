@@ -2,7 +2,6 @@ const CREDENTIALS_KEY = "soodering.credentials";
 const LEGACY_CREDENTIALS_KEY = "shimanoLunch.credentials";
 const REMEMBERED_USERNAME_KEY = "soodering.rememberedUsername";
 const KEEPALIVE_MS = 4 * 60 * 1000;
-const MENU_AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 const state = {
   account: null,
@@ -26,7 +25,6 @@ const state = {
   },
   lastActivityAt: Date.now(),
   idleTimer: null,
-  menuRefreshTimer: null,
   orderKeys: new Map(),
   failedOrderProducts: [],
   isOrdering: false,
@@ -147,8 +145,8 @@ function renderReleaseSubscription(data) {
   releaseSubscriptionPanel.hidden = !data.enabled || !state.account;
   releaseSubscriptionButton.textContent = data.subscribed ? "Unsubscribe" : "Subscribe";
   releaseSubscriptionStatus.textContent = data.subscribed
-    ? `Subscribed: checked daily at 8:00 AM Singapore time. New lunch dates will be emailed to ${state.account.username}.`
-    : "Receive new lunch date emails after the daily 8:00 AM Singapore time check.";
+    ? `Subscribed: new lunch dates are checked when someone refreshes the menu and emailed to ${state.account.username}.`
+    : "Receive new lunch date emails when someone refreshes the menu.";
 }
 
 async function loadReleaseSubscription() {
@@ -1120,8 +1118,6 @@ async function loadMenus(refresh = false) {
   try {
     state.data = withoutHiddenMenuItems(await api(`/api/menus${refresh ? "?refresh=1" : ""}`, { headers: {} }));
     renderMenus();
-    clearTimeout(state.menuRefreshTimer);
-    state.menuRefreshTimer = setTimeout(() => loadMenus(false), state.data.refreshing ? 1500 : MENU_AUTO_REFRESH_MS);
   } catch (error) {
     statusEl.textContent = error.message;
     menusEl.innerHTML = "";

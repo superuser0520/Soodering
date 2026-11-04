@@ -3,7 +3,7 @@ const crypto = require("node:crypto");
 const { appendFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { config, publicConfig } = require("./config");
-const { createReleaseNotifications, nextReleaseCheck } = require("./release-notifications");
+const { createReleaseNotifications } = require("./release-notifications");
 
 const PORT = config.port;
 const SITE_ORIGIN = config.siteOrigin;
@@ -30,7 +30,6 @@ const MENU_CACHE_VERSION = 3;
 const EXTENDED_MENU_CACHE_VERSION = 2;
 
 let cachedMenus = null;
-let cachedAt = 0;
 const CACHE_MS = config.menuCacheMs;
 const SESSION_COOKIE = "soodering_sid";
 const AUTO_LOGIN_COOKIE = "soodering_auto_login";
@@ -1470,21 +1469,14 @@ function extendedMenuEntryCacheMs(entry) {
 }
 
 async function loadMenus(force = false) {
-  const now = Date.now();
-  if (!force && cachedMenus) {
-    if (now - cachedAt < CACHE_MS) return cachedMenus;
-    refreshMenusInBackground();
-    return { ...cachedMenus, refreshing: true };
-  }
+  if (!force && cachedMenus) return cachedMenus;
   if (menuLoadPromise) return menuLoadPromise;
 
   if (!force && !cachedMenus) {
     const persisted = await readPersistedMenus();
     if (persisted) {
       cachedMenus = persisted;
-      cachedAt = Date.parse(persisted.fetchedAt) || 0;
-      if (now - cachedAt >= CACHE_MS) refreshMenusInBackground();
-      return { ...cachedMenus, refreshing: now - cachedAt >= CACHE_MS };
+      return cachedMenus;
     }
   }
 
@@ -1524,18 +1516,6 @@ async function readPersistedMenus() {
     if (error.code === "ENOENT" || error instanceof SyntaxError) return null;
     throw error;
   }
-}
-
-function refreshMenusInBackground() {
-  if (menuLoadPromise) return;
-  menuLoadPromise = loadMenusUncached()
-    .catch((error) => {
-      console.warn(`Background menu refresh failed: ${error.message}`);
-      return cachedMenus;
-    })
-    .finally(() => {
-      menuLoadPromise = null;
-    });
 }
 
 async function loadMenusUncached({ forceExtended = false } = {}) {
@@ -1584,7 +1564,6 @@ async function loadMenusUncached({ forceExtended = false } = {}) {
     days,
     totalProducts: days.reduce((sum, day) => sum + day.products.length, 0)
   });
-  cachedAt = now;
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(MENU_CACHE_FILE, JSON.stringify(cachedMenus), "utf8");
   return cachedMenus;
@@ -1726,6 +1705,9 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/menus") {
       const force = url.searchParams.get("refresh") === "1";
       const menus = await loadMenus(force);
+      if (force && releaseNotifications.enabled) {
+        await releaseNotifications.observe(menus.days).catch(() => console.warn("Menu release notifications could not be sent."));
+      }
       await trackUsage(request, session, force ? "menus.refresh" : "menus.load", {
         days: menus.days.length,
         products: menus.totalProducts
@@ -1945,26 +1927,6 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, error.status || 500, { error: error.message });
   }
 });
-
-let releasePollTimer;
-server.on("listening", () => {
-  if (!releaseNotifications.enabled) return;
-  const schedule = () => {
-    if (!server.listening) return;
-    releasePollTimer = setTimeout(async () => {
-      try {
-        if (await releaseNotifications.hasSubscribers()) {
-          const menus = await loadMenus(true);
-          await releaseNotifications.observe(menus.days);
-        }
-      } catch { console.warn("Daily release check failed; the next scheduled check is at 08:00 Singapore time tomorrow."); }
-      finally { schedule(); }
-    }, nextReleaseCheck() - Date.now());
-    releasePollTimer.unref();
-  };
-  schedule();
-});
-server.on("close", () => clearTimeout(releasePollTimer));
 
 async function startServer() {
   if (server.listening) return Promise.resolve(server);
