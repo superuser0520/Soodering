@@ -131,6 +131,7 @@ async function fetchHtml(url) {
 
 function createSiteSession() {
   const cookies = new Map();
+  let userAgent = `SPL-${crypto.randomBytes(12).toString("hex")}`;
 
   function storeCookies(response) {
     const setCookies = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
@@ -149,7 +150,7 @@ function createSiteSession() {
     const url = new URL(pathname, SITE_ORIGIN);
     if (url.origin !== SITE_ORIGIN) throw new Error("Cafeteria requests must remain on the configured origin.");
     const headers = {
-      "user-agent": "Mozilla/5.0 Shimano Lunch Viewer",
+      "user-agent": userAgent,
       accept: "text/html,application/xhtml+xml,application/json",
       referer: SITE_ORIGIN,
       ...(options.headers || {})
@@ -188,6 +189,9 @@ function createSiteSession() {
     orderOperations: new Map(),
     cookies,
     request,
+    rotateUserAgent() {
+      userAgent = `SPL-${crypto.randomBytes(12).toString("hex")}`;
+    },
     reset({ clearCredentials = true } = {}) {
       cookies.clear();
       this.account = null;
@@ -583,6 +587,7 @@ function parseAccount(html) {
 
 async function loginToSite(session, username, password) {
   session.reset({ clearCredentials: false });
+  session.rotateUserAgent();
   const loginHtml = await readSitePage(session, "/");
   const body = new URLSearchParams({
     username,
