@@ -199,6 +199,27 @@ test("expires inactive sessions and rejects off-origin cafeteria requests", asyn
   );
 });
 
+test("cafeteria session keeps its user agent until rotated", async () => {
+  const originalFetch = globalThis.fetch;
+  const agents = [];
+  globalThis.fetch = async (_url, options) => {
+    agents.push(options.headers["user-agent"]);
+    return new Response("ok");
+  };
+  try {
+    const session = createSiteSession();
+    await session.request("/");
+    await session.request("/woo-wallet/");
+    session.rotateUserAgent();
+    await session.request("/orders/");
+    assert.match(agents[0], /^SPL-[0-9a-f]{24}$/);
+    assert.equal(agents[0], agents[1]);
+    assert.notEqual(agents[1], agents[2]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("removes configured irrelevant meals from menu data", () => {
   const filtered = filterHiddenMenuItems({
     days: [{ date: "2026-07-23", products: [

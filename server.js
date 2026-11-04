@@ -134,6 +134,7 @@ async function fetchHtml(url) {
 
 function createSiteSession() {
   const cookies = new Map();
+  let userAgent = randomUserAgent();
 
   function storeCookies(response) {
     const setCookies = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
@@ -155,7 +156,7 @@ function createSiteSession() {
       accept: "text/html,application/xhtml+xml,application/json",
       referer: SITE_ORIGIN,
       ...(options.headers || {}),
-      "user-agent": randomUserAgent()
+      "user-agent": userAgent
     };
     const cookie = cookieHeader();
     if (cookie) headers.cookie = cookie;
@@ -191,6 +192,9 @@ function createSiteSession() {
     orderOperations: new Map(),
     cookies,
     request,
+    rotateUserAgent() {
+      userAgent = randomUserAgent();
+    },
     reset({ clearCredentials = true } = {}) {
       cookies.clear();
       this.account = null;
@@ -586,6 +590,7 @@ function parseAccount(html) {
 
 async function loginToSite(session, username, password) {
   session.reset({ clearCredentials: false });
+  session.rotateUserAgent();
   const loginHtml = await readSitePage(session, "/");
   const body = new URLSearchParams({
     username,
