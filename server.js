@@ -293,6 +293,17 @@ async function restoreAutoLogin(request, response, session) {
   saved.expiresAt = Date.now() + AUTO_LOGIN_MS;
   await writeFile(file, JSON.stringify(saved), { mode: 0o600 });
   setAutoLoginCookie(request, response, token);
+  await checkMenuReleaseOnLogin();
+}
+
+async function checkMenuReleaseOnLogin() {
+  if (!releaseNotifications.enabled) return;
+  try {
+    const menus = await loadMenus(true);
+    await releaseNotifications.observe(menus.days);
+  } catch {
+    console.warn("Login menu release check failed; login remains available.");
+  }
 }
 
 function getRequestSession(request, response, { touch = true } = {}) {
@@ -1705,9 +1716,6 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/api/menus") {
       const force = url.searchParams.get("refresh") === "1";
       const menus = await loadMenus(force);
-      if (force && releaseNotifications.enabled) {
-        await releaseNotifications.observe(menus.days).catch(() => console.warn("Menu release notifications could not be sent."));
-      }
       await trackUsage(request, session, force ? "menus.refresh" : "menus.load", {
         days: menus.days.length,
         products: menus.totalProducts
@@ -1731,6 +1739,7 @@ const server = http.createServer(async (request, response) => {
       } catch {
         autoLoginWarning = "Login succeeded, but Auto login could not be saved. Check the server data-folder permissions.";
       }
+      await checkMenuReleaseOnLogin();
       sendJson(response, 200, { account: serializeAccount(session), balance: wallet.balance, autoLoginWarning });
       return;
     }

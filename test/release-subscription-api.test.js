@@ -13,6 +13,7 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
   process.env.CAFETERIA_ORIGIN = "https://cafeteria.invalid";
   process.env.USAGE_ADMIN_EMAIL = "admin@example.com";
   let upstreamRequests = 0;
+  let menuChecks = 0;
   const sent = [];
   global.fetch = async (url, options) => {
     if (String(url).startsWith("https://example.invalid/")) {
@@ -20,6 +21,10 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
       return new Response(null, { status: 202 });
     }
     upstreamRequests++;
+    if (new URL(url).pathname === "/lunch/") {
+      menuChecks++;
+      throw new Error("Menu temporarily unavailable");
+    }
     if (String(url).includes("/orders/")) return new Response('<table><tbody><tr><td>#123</td><td>Today</td><td>November 3, 2026</td><td>Chicken</td><td>Processing</td><td>$5</td></tr></tbody></table>');
     return new Response('<p>Hello <strong>Person</strong></p><p class="woo-wallet-price">$100</p>');
   };
@@ -35,6 +40,7 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
       body: JSON.stringify({ username: "person@example.com", password: "test" })
     });
     assert.equal(login.status, 200);
+    assert.equal(menuChecks, 1); // A failed release check must not block successful login.
     const cookie = login.headers.getSetCookie()[0].split(";")[0];
     const status = await realFetch(`${base}/api/release-subscription`, { headers: { cookie } });
     assert.deepEqual(await status.json(), { enabled: true, subscribed: false });
@@ -48,7 +54,8 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
     assert.deepEqual(await unsubscribe.json(), { enabled: true, subscribed: false });
     const config = await realFetch(`${base}/api/config`);
     assert.doesNotMatch(await config.text(), /private-webhook-secret|POWER_AUTOMATE_RELEASE_URL/);
-    assert.equal(upstreamRequests, 3); // Login page, login POST, wallet; no email or menu requests.
+    assert.equal(upstreamRequests, 4); // Login page, login POST, wallet, and login-triggered menu check.
+    assert.equal(menuChecks, 1); // Subscription/config requests must not trigger more checks.
     const denied = await realFetch(`${base}/api/admin/release-test-email`, {
       method: "POST", headers: { cookie }, body: "{}"
     });
