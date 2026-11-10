@@ -293,7 +293,12 @@ async function restoreAutoLogin(request, response, session) {
   saved.expiresAt = Date.now() + AUTO_LOGIN_MS;
   await writeFile(file, JSON.stringify(saved), { mode: 0o600 });
   setAutoLoginCookie(request, response, token);
-  await checkMenuReleaseOnLogin();
+  scheduleMenuReleaseCheck();
+}
+
+function scheduleMenuReleaseCheck() {
+  if (!releaseNotifications.enabled) return;
+  setImmediate(() => { void checkMenuReleaseOnLogin(); });
 }
 
 async function checkMenuReleaseOnLogin() {
@@ -1739,8 +1744,8 @@ const server = http.createServer(async (request, response) => {
       } catch {
         autoLoginWarning = "Login succeeded, but Auto login could not be saved. Check the server data-folder permissions.";
       }
-      await checkMenuReleaseOnLogin();
       sendJson(response, 200, { account: serializeAccount(session), balance: wallet.balance, autoLoginWarning });
+      scheduleMenuReleaseCheck();
       return;
     }
 

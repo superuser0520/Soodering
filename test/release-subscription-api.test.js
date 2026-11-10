@@ -14,6 +14,14 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
   process.env.USAGE_ADMIN_EMAIL = "admin@example.com";
   let upstreamRequests = 0;
   let menuChecks = 0;
+  let releaseMenuCheck;
+  let signalMenuStarted;
+  const menuStarted = new Promise((resolve) => { signalMenuStarted = resolve; });
+  const menuBlocked = new Promise((resolve) => { releaseMenuCheck = resolve; });
+  let releaseAutoMenuCheck;
+  let signalAutoMenuStarted;
+  const autoMenuStarted = new Promise((resolve) => { signalAutoMenuStarted = resolve; });
+  const autoMenuBlocked = new Promise((resolve) => { releaseAutoMenuCheck = resolve; });
   const sent = [];
   global.fetch = async (url, options) => {
     if (String(url).startsWith("https://example.invalid/")) {
@@ -23,6 +31,13 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
     upstreamRequests++;
     if (new URL(url).pathname === "/lunch/") {
       menuChecks++;
+      if (menuChecks === 1) {
+        signalMenuStarted();
+        await menuBlocked;
+      } else if (menuChecks === 2) {
+        signalAutoMenuStarted();
+        await autoMenuBlocked;
+      }
       throw new Error("Menu temporarily unavailable");
     }
     if (String(url).includes("/orders/")) return new Response('<table><tbody><tr><td>#123</td><td>Today</td><td>November 3, 2026</td><td>Chicken</td><td>Processing</td><td>$5</td></tr></tbody></table>');
@@ -37,10 +52,13 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
     assert.equal(anonymous.status, 401);
     const login = await realFetch(`${base}/api/login`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "person@example.com", password: "test" })
+      body: JSON.stringify({ username: "person@example.com", password: "test", autoLogin: true }),
+      signal: AbortSignal.timeout(3000)
     });
     assert.equal(login.status, 200);
-    assert.equal(menuChecks, 1); // A failed release check must not block successful login.
+    await menuStarted;
+    assert.equal(menuChecks, 1); // Login completes even while the release check is blocked.
+    releaseMenuCheck();
     const cookie = login.headers.getSetCookie()[0].split(";")[0];
     const status = await realFetch(`${base}/api/release-subscription`, { headers: { cookie } });
     assert.deepEqual(await status.json(), { enabled: true, subscribed: false });
@@ -56,6 +74,12 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
     assert.doesNotMatch(await config.text(), /private-webhook-secret|POWER_AUTOMATE_RELEASE_URL/);
     assert.equal(upstreamRequests, 4); // Login page, login POST, wallet, and login-triggered menu check.
     assert.equal(menuChecks, 1); // Subscription/config requests must not trigger more checks.
+    const autoCookie = login.headers.getSetCookie().find((value) => /^soodering_auto_login=[a-f0-9]{64};/.test(value)).split(";")[0];
+    const restored = await realFetch(`${base}/api/session`, { headers: { cookie: autoCookie }, signal: AbortSignal.timeout(3000) });
+    assert.equal(restored.status, 200);
+    assert.equal((await restored.json()).account.username, "person@example.com");
+    await autoMenuStarted;
+    releaseAutoMenuCheck();
     const denied = await realFetch(`${base}/api/admin/release-test-email`, {
       method: "POST", headers: { cookie }, body: "{}"
     });
@@ -107,6 +131,8 @@ test("subscription API requires login, validates opt-in, and keeps the webhook p
     assert.equal(sent[1].email, "person@example.com");
     assert.match(sent[1].subject, /November 2099/);
   } finally {
+    releaseMenuCheck();
+    releaseAutoMenuCheck();
     await new Promise((resolve) => server.close(resolve));
     global.fetch = realFetch;
     await rm(directory, { recursive: true, force: true });
