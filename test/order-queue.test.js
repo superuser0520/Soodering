@@ -55,7 +55,7 @@ test("25-date queue recovers temporary failures and lost checkout responses with
   let child;
   try {
     child = spawn(process.execPath, ["-e", 'const {server}=require("./server");server.listen(0,"127.0.0.1",()=>console.log(server.address().port));'], {
-      cwd: path.resolve(__dirname, ".."), env: { ...process.env, SOODEERING_DATA_DIR: dataDir, CAFETERIA_ORIGIN: `http://127.0.0.1:${cafeteria.address().port}` }, stdio: ["ignore", "pipe", "pipe"]
+      cwd: path.resolve(__dirname, ".."), env: { ...process.env, SOODEERING_DATA_DIR: dataDir, TOR_SOCKS_URL: "off", CAFETERIA_ORIGIN: `http://127.0.0.1:${cafeteria.address().port}` }, stdio: ["ignore", "pipe", "pipe"]
     });
     const port = await new Promise((resolve, reject) => {
       child.stdout.once("data", (chunk) => resolve(Number(String(chunk).trim())));

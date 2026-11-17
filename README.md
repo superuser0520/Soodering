@@ -24,6 +24,8 @@ PORT=3001 npm start
 
 Then open `http://localhost:3001`.
 
+The web server sends cafeteria requests through a Tor SOCKS5 listener on `127.0.0.1:9050` by default. Start Tor on the same host before using the web app. Set `TOR_SOCKS_URL` in `.env` if Tor listens on another local SOCKS5 port. Cafeteria requests fail when Tor is unavailable; the desktop app and email notifications continue to connect directly.
+
 Run the desktop app with encrypted operating-system credential storage:
 
 ```sh

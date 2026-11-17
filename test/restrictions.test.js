@@ -19,7 +19,7 @@ test("admin restrictions persist across restart and enforce all order routes", a
   async function start() {
     child = spawn(process.execPath, ["-e", 'const {server}=require("./server"); server.listen(0,"127.0.0.1",()=>console.log(server.address().port));'], {
       cwd: path.resolve(__dirname, ".."),
-      env: { ...process.env, SOODEERING_DATA_DIR: dataDir, USAGE_ADMIN_EMAIL: "admin@example.com", CAFETERIA_ORIGIN: `http://127.0.0.1:${cafeteria.address().port}` },
+      env: { ...process.env, SOODEERING_DATA_DIR: dataDir, TOR_SOCKS_URL: "off", USAGE_ADMIN_EMAIL: "admin@example.com", CAFETERIA_ORIGIN: `http://127.0.0.1:${cafeteria.address().port}` },
       stdio: ["ignore", "pipe", "pipe"]
     });
     const port = await new Promise((resolve, reject) => {

@@ -45,5 +45,8 @@
       "artifactName": "SooDering-Portable.exe"
     },
     "asar": true
+  },
+  "dependencies": {
+    "undici": "^7.30.2"
   }
 }

@@ -29,6 +29,7 @@ const config = {
   port: numberFromEnv("PORT", 3000, { min: 1, max: 65535 }),
   host: process.env.HOST || "127.0.0.1",
   siteOrigin: process.env.CAFETERIA_ORIGIN || "https://ssip-cafeteria.whew.life",
+  torSocksUrl: process.env.TOR_SOCKS_URL || "socks5://127.0.0.1:9050",
   menuCacheMs: numberFromEnv("MENU_CACHE_MS", 5 * 60 * 1000),
   menuLookaheadMonths: numberFromEnv("MENU_LOOKAHEAD_MONTHS", 1, { min: 0, max: 6 }),
   extendedMenuCacheMs: numberFromEnv("EXTENDED_MENU_CACHE_MS", 6 * 60 * 60 * 1000, { min: 60_000 }),

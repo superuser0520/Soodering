@@ -4,9 +4,18 @@ const { appendFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } 
 const path = require("node:path");
 const { config, publicConfig } = require("./config");
 const { createReleaseNotifications } = require("./release-notifications");
+const { Socks5ProxyAgent } = require("undici");
 
 const PORT = config.port;
 const SITE_ORIGIN = config.siteOrigin;
+let cafeteriaDispatcher;
+if (process.env.SOODEERING_DESKTOP !== "1" && config.torSocksUrl !== "off") {
+  const torProxyUrl = new URL(config.torSocksUrl);
+  if (torProxyUrl.protocol !== "socks5:" || !["127.0.0.1", "localhost", "[::1]"].includes(torProxyUrl.hostname)) {
+    throw new Error("TOR_SOCKS_URL must be a local socks5:// proxy URL or off.");
+  }
+  cafeteriaDispatcher = new Socks5ProxyAgent(torProxyUrl);
+}
 const LUNCH_URL = `${SITE_ORIGIN}/lunch/`;
 function randomUserAgent() {
   const platforms = ["Windows NT 10.0; Win64; x64", "Macintosh; Intel Mac OS X 10_15_7", "X11; Linux x86_64", "X11; Linux aarch64"];
@@ -120,6 +129,7 @@ function normalizeStall(value) {
 
 async function fetchHtml(url) {
   const response = await fetch(url, {
+    dispatcher: cafeteriaDispatcher,
     signal: AbortSignal.timeout(60000),
     headers: {
       "user-agent": randomUserAgent(),
@@ -164,6 +174,7 @@ function createSiteSession() {
     if (cookie) headers.cookie = cookie;
 
     const response = await fetch(url, {
+      dispatcher: cafeteriaDispatcher,
       redirect: "manual",
       signal: AbortSignal.timeout(60000),
       ...options,
