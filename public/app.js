@@ -1032,7 +1032,9 @@ function renderProduct(product) {
 
   return `
     <li class="menu-item ${orders.length ? "ordered-item" : ""}">
-      <a class="thumb" href="${escapeHtml(product.productUrl)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(product.title)}"><img class="stall-logo" src="${stallLogoPath(product.stall)}" alt="" aria-hidden="true"></a>
+      ${window.sooderingCredentials?.available
+        ? `<a class="thumb" href="${escapeHtml(product.productUrl)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(product.title)}"><img class="stall-logo" src="${stallLogoPath(product.stall)}" alt="" aria-hidden="true"></a>`
+        : `<span class="thumb"><img class="stall-logo" src="${stallLogoPath(product.stall)}" alt="" aria-hidden="true"></span>`}
       <div class="menu-copy">
         <p class="stall">${escapeHtml(product.stall)}</p>
         <h3>${escapeHtml(product.item)}</h3>
